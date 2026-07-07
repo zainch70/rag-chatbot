@@ -1,4 +1,5 @@
 import { documentProcessorService } from "./document-processor.service";
+import { embeddingService } from "./embedding.service";
 import { textChunkerService } from "./text-chunker.service";
 
 import { chunkRepository } from "@/repositories/chunk.repository";
@@ -39,14 +40,22 @@ export class IngestionService {
       console.log("First chunk preview:");
       console.log(chunks[0]?.content.slice(0, 150));
 
-      console.log("4️⃣ Saving chunks to database");
+      console.log("4️⃣ Generating embeddings");
+      const embeddings = await embeddingService.generateEmbeddings(
+        chunks.map((chunk) => chunk.content)
+      );
+
+      console.log(`✅ ${embeddings.length} embeddings generated`);
+
+      console.log("5️⃣ Saving chunks to database");
 
       const savedChunks =
         await chunkRepository.createMany(
-          chunks.map((chunk) => ({
+          chunks.map((chunk, index) => ({
             documentId: document.id,
             chunkIndex: chunk.index,
             content: chunk.content,
+            embedding: embeddings[index],
           }))
         );
 
@@ -54,7 +63,7 @@ export class IngestionService {
         `✅ ${savedChunks.length} chunks saved`
       );
 
-      console.log("5️⃣ Updating status -> READY");
+      console.log("6️⃣ Updating status -> READY");
 
       await documentService.updateStatus(
         document.id,

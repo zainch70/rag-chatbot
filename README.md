@@ -8,18 +8,17 @@ A Next.js application for building a **Retrieval-Augmented Generation (RAG)** ch
 - Local file storage in `uploads/`
 - PDF text extraction (`pdf2json`)
 - Text chunking (character-based, with overlap)
+- Gemini embeddings generated during ingestion (`gemini-embedding-2`, 1536 dimensions)
 - Document and chunk persistence in PostgreSQL
 - Document status lifecycle: `UPLOADING` → `PROCESSING` → `READY` / `FAILED`
 
 ## Planned (not yet implemented)
 
-- Generating and storing embeddings during ingestion
-- Vector similarity search (pgvector retrieval)
 - Chat API and chat UI
 - Document list / management UI
 - Sidebar and navbar layout
 
-Empty stub files exist for these features (`components/chat/`, `components/documents/`, `components/layout/`, `services/chat.service.ts`, `services/retrieval.service.ts`, `lib/prompts.ts`).
+Empty stub files exist for these features (`components/chat/`, `components/documents/`, `components/layout/`, `services/chat.service.ts`, `lib/prompts.ts`).
 
 ---
 
@@ -31,7 +30,7 @@ Empty stub files exist for these features (`components/chat/`, `components/docum
 | Styling | Tailwind CSS v4, shadcn/ui, Lucide icons |
 | Database | PostgreSQL 17 + pgvector (Docker) |
 | ORM | Drizzle ORM + Drizzle Kit |
-| AI | OpenAI SDK (`text-embedding-3-small` — service exists, not wired yet) |
+| AI | Gemini API via `@google/genai` (`gemini-embedding-2`, 1536 dimensions) |
 | PDF parsing | `pdf2json` |
 | Notifications | Sonner |
 
@@ -53,7 +52,8 @@ Upload PDF
   → create document record (status: PROCESSING)
   → extract text from PDF
   → split text into chunks
-  → save chunks to document_chunks
+  → generate embeddings for each chunk
+  → save chunks + embeddings to document_chunks
   → mark document READY
 ```
 
@@ -102,7 +102,7 @@ rag-chatbot/
 
 ## Code tour — main files and how they connect
 
-This section explains the **implemented** ingestion pipeline. Read it top-to-bottom to follow one PDF upload from UI to database.
+This section explains the **implemented** ingestion and retrieval pipeline. Read it top-to-bottom to follow one PDF upload from UI to database, then a query back through vector search.
 
 ### Layer overview
 
@@ -128,6 +128,7 @@ upload-form.tsx
     → ingestion.service.ts       (orchestrate processing)
       → document-processor.service.ts  (PDF → text)
       → text-chunker.service.ts        (text → chunks)
+      → embedding.service.ts           (chunks → vectors)
       → chunk.repository.ts            (save chunks)
     → document.service.ts        (mark READY or FAILED)
 ```
@@ -147,6 +148,7 @@ upload-form.tsx
 | `app/api/documents/upload/route.ts` | **Main endpoint.** Receives PDF, calls `documentService.upload()` then `ingestionService.process()` |
 | `app/api/documents/extract/route.ts` | Dev only — extract text from a file path (tests `document-processor.service`) |
 | `app/api/chunk-test/route.ts` | Dev only — chunk raw text (tests `text-chunker.service`) |
+| `app/api/retrieval-test/route.ts` | Dev only — embeds a query and returns the top matching chunks |
 | `app/api/health/db/route.ts` | DB connectivity check |
 
 ### Services (business logic)
@@ -157,14 +159,15 @@ upload-form.tsx
 | `services/ingestion.service.ts` | **Pipeline orchestrator** — extract → chunk → save → set READY/FAILED |
 | `services/document-processor.service.ts` | Reads PDF from disk via `pdf2json`, returns plain text |
 | `services/text-chunker.service.ts` | Splits text into chunks (1000 chars, 200 overlap, word-boundary aware) |
-| `services/embedding.service.ts` | OpenAI embeddings (`text-embedding-3-small`) — **exists, not wired into ingestion yet** |
+| `services/embedding.service.ts` | Gemini embeddings (`gemini-embedding-2`, 1536 dimensions) — called during ingestion |
+| `services/retrieval.service.ts` | Generates a query embedding and performs vector similarity search over stored chunks |
 
 ### Repositories (database access)
 
 | File | Role |
 | --- | --- |
 | `repositories/document.repository.ts` | `create`, `findById`, `updateStatus` on `documents` |
-| `repositories/chunk.repository.ts` | `createMany`, `findByDocumentId` on `document_chunks` |
+| `repositories/chunk.repository.ts` | `createMany`, `findByDocumentId`, `findSimilar` on `document_chunks` |
 
 ### Database layer
 
@@ -180,15 +183,14 @@ upload-form.tsx
 
 These files exist for upcoming RAG chat features and are **not** part of the current upload pipeline:
 
-- `services/chat.service.ts`, `services/retrieval.service.ts`
+- `services/chat.service.ts`
 - `lib/prompts.ts`
 - `components/chat/*`, `components/documents/*`, `components/layout/*`
 
 ### What's still missing for full RAG
 
-1. Call `embedding.service` during ingestion and store vectors in `document_chunks.embedding`
-2. Implement `retrieval.service` — pgvector similarity search
-3. Implement `chat.service` + `/api/chat` + chat UI components
+1. Implement `chat.service` + `/api/chat` + chat UI components
+2. Connect the retrieval flow to the future chat experience and source display
 
 ---
 
@@ -216,14 +218,16 @@ Create a `.env` file in the project root (or copy from the example below):
 ```env
 DATABASE_URL=postgres://postgres:12345@localhost:5433/rag_db
 
-# Required later for embeddings and chat (not wired into ingestion yet)
-OPENAI_API_KEY=your_openai_api_key_here
+# Required for embeddings during ingestion
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
+
+If you were previously using OpenAI in this project, rename `OPENAI_API_KEY` to `GEMINI_API_KEY` in your local `.env`.
 
 | Variable | Description |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string. Default matches `docker-compose.yaml` (port `5433`, db `rag_db`). |
-| `OPENAI_API_KEY` | OpenAI API key. Needed when embedding and chat features are enabled. |
+| `GEMINI_API_KEY` | Gemini API key. Needed to generate embeddings during ingestion. |
 
 ### 3. Start PostgreSQL
 
@@ -334,7 +338,7 @@ On failure, the API returns `{ "message": "..." }` with an appropriate HTTP stat
 | `chunk_index` | integer | Order within the document |
 | `page_number` | integer | Optional (not populated yet) |
 | `content` | text | Chunk text |
-| `embedding` | vector(1536) | OpenAI `text-embedding-3-small` dimensions (nullable until embeddings are wired) |
+| `embedding` | vector(1536) | Gemini `gemini-embedding-2` output stored at 1536 dimensions |
 | `created_at` | timestamp | Auto-managed |
 
 ---
@@ -402,7 +406,7 @@ PDFs are stored locally at `uploads/{document-id}.pdf`. This folder is created a
 
 - The home page lives at `app/(dashboard)/page.tsx` and currently renders only the upload form.
 - Empty stub files remain only for **future** features (chat, retrieval, documents list, layout). Redundant empty duplicates were removed.
-- `embedding.service.ts` can generate OpenAI embeddings but is **not yet called** during ingestion.
+- `embedding.service.ts` generates Gemini embeddings during ingestion and stores them in `document_chunks.embedding`.
 - Chunking defaults: **1000 characters** per chunk, **200 character** overlap, with word-boundary awareness.
 - See [Code tour](#code-tour--main-files-and-how-they-connect) for a full walkthrough of how files connect.
 
