@@ -14,10 +14,6 @@ import {
 } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-type ChatApiResponse = {
-  answer: string;
-};
-
 const WELCOME_MESSAGE: ChatMessageData = {
   id: "welcome",
   role: "assistant",
@@ -41,8 +37,17 @@ export default function ChatWindow() {
       role: "user",
       content: message,
     };
+    const assistantMessageId = crypto.randomUUID();
 
-    setMessages((currentMessages) => [...currentMessages, userMessage]);
+    setMessages((currentMessages) => [
+      ...currentMessages,
+      userMessage,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+      },
+    ]);
     setLoading(true);
 
     try {
@@ -57,30 +62,53 @@ export default function ChatWindow() {
         }),
       });
 
-      const data = (await response.json()) as
-        | ChatApiResponse
-        | { message?: string };
+      if (!response.ok) {
+        const errorData = (await response.json().catch(() => null)) as
+          | { message?: string }
+          | null;
 
-      if (!response.ok || !("answer" in data)) {
-        throw new Error(
-          "message" in data && data.message
-            ? data.message
-            : "Could not get an answer."
+        throw new Error(errorData?.message ?? "Could not get an answer.");
+      }
+
+      const reader = response.body?.getReader();
+
+      if (!reader) {
+        throw new Error("Streaming is not supported in this browser.");
+      }
+
+      const decoder = new TextDecoder();
+      let streamedContent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        streamedContent += decoder.decode(value, { stream: true });
+
+        setMessages((currentMessages) =>
+          currentMessages.map((currentMessage) =>
+            currentMessage.id === assistantMessageId
+              ? {
+                  ...currentMessage,
+                  content: streamedContent,
+                }
+              : currentMessage
+          )
         );
       }
 
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: data.answer,
-        },
-      ]);
+      if (!streamedContent.trim()) {
+        throw new Error("Chat model returned an empty response.");
+      }
     } catch (error) {
       setMessages((currentMessages) =>
         currentMessages.filter(
-          (currentMessage) => currentMessage.id !== userMessage.id
+          (currentMessage) =>
+            currentMessage.id !== userMessage.id &&
+            currentMessage.id !== assistantMessageId
         )
       );
       toast.error(
@@ -103,10 +131,6 @@ export default function ChatWindow() {
             {messages.map((message) => (
               <ChatMessage key={message.id} message={message} />
             ))}
-
-            {loading ? (
-              <p className="text-sm text-muted-foreground">Thinking...</p>
-            ) : null}
 
             <div ref={bottomRef} />
           </div>

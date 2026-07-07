@@ -1,3 +1,5 @@
+import { access } from "fs/promises";
+
 import { NextResponse } from "next/server";
 
 import { documentProcessorService } from "@/services/document-processor.service";
@@ -6,9 +8,9 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
 
-    const { filePath } = body;
+    const { filePath }: { filePath?: string } = body;
 
-    if (!filePath) {
+    if (!filePath?.trim()) {
       return NextResponse.json(
         {
           message: "filePath is required.",
@@ -19,12 +21,14 @@ export async function POST(request: Request) {
       );
     }
 
-    const document =
+    await access(filePath);
+
+    const extracted =
       await documentProcessorService.extractText(filePath);
 
-    return NextResponse.json(document);
+    return NextResponse.json(extracted);
   } catch (error) {
-    console.error("Document extraction failed:", error);
+    console.error("PDF extraction test failed:", error);
 
     return NextResponse.json(
       {

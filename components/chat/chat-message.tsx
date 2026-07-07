@@ -23,7 +23,11 @@ export default function ChatMessage({
             : "bg-muted/80 text-foreground"
         )}
       >
-        <p className="whitespace-pre-wrap">{message.content}</p>
+        <p className="whitespace-pre-wrap">
+          {!isUser && !message.content.trim()
+            ? "Thinking..."
+            : message.content}
+        </p>
       </div>
     </div>
   );

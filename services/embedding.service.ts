@@ -1,12 +1,25 @@
-import { GoogleGenAI } from "@google/genai";
+import {
+  createGoogle,
+  type GoogleEmbeddingModelOptions,
+} from "@ai-sdk/google";
+import { embed } from "ai";
 
 const EMBEDDING_MODEL = "gemini-embedding-2";
 const EMBEDDING_DIMENSIONS = 1536;
 const EMBEDDING_BATCH_SIZE = 100;
 
-const ai = new GoogleGenAI({
+const google = createGoogle({
   apiKey: process.env.GEMINI_API_KEY,
 });
+
+const embeddingModel = google.embedding(EMBEDDING_MODEL);
+
+const embeddingProviderOptions = {
+  google: {
+    outputDimensionality: EMBEDDING_DIMENSIONS,
+    taskType: "RETRIEVAL_DOCUMENT",
+  } satisfies GoogleEmbeddingModelOptions,
+};
 
 export class EmbeddingService {
   private assertApiKey() {
@@ -43,16 +56,11 @@ export class EmbeddingService {
       const batch = texts.slice(start, start + EMBEDDING_BATCH_SIZE);
       const batchEmbeddings = await Promise.all(
         batch.map(async (text, index) => {
-          const response = await ai.models.embedContent({
-            model: EMBEDDING_MODEL,
-            contents: text,
-            config: {
-              outputDimensionality: EMBEDDING_DIMENSIONS,
-              taskType: "RETRIEVAL_DOCUMENT",
-            },
+          const { embedding } = await embed({
+            model: embeddingModel,
+            value: text,
+            providerOptions: embeddingProviderOptions,
           });
-
-          const embedding = response.embeddings?.[0]?.values;
 
           return this.validateEmbedding(
             embedding,

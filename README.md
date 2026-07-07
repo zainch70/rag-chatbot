@@ -1,6 +1,6 @@
 # RAG Chatbot
 
-A Next.js application for building a **Retrieval-Augmented Generation (RAG)** chatbot over your own PDF documents. Upload PDFs, extract and chunk their text, store the chunks in PostgreSQL with pgvector, and (planned) chat with an LLM using retrieved context.
+A Next.js application for building a **Retrieval-Augmented Generation (RAG)** chatbot over your own PDF documents. Upload PDFs, extract and chunk their text, store the chunks in PostgreSQL with pgvector, and chat with Gemini using retrieved context.
 
 ## What works today
 
@@ -9,16 +9,17 @@ A Next.js application for building a **Retrieval-Augmented Generation (RAG)** ch
 - PDF text extraction (`pdf2json`)
 - Text chunking (character-based, with overlap)
 - Gemini embeddings generated during ingestion (`gemini-embedding-2`, 1536 dimensions)
+- Vector similarity retrieval over stored chunks
+- Chat API and UI powered by Vercel AI SDK + Gemini (streaming)
 - Document and chunk persistence in PostgreSQL
 - Document status lifecycle: `UPLOADING` → `PROCESSING` → `READY` / `FAILED`
 
 ## Planned (not yet implemented)
 
-- Chat UI
 - Document list / management UI
-- Sidebar and navbar layout
-
-Empty stub files exist for these features (`components/chat/`, `components/documents/`, `components/layout/`).
+- Navbar and sidebar layout
+- Document picker in chat (filter retrieval by `documentId`)
+- Source citations in the chat UI
 
 ---
 
@@ -30,7 +31,7 @@ Empty stub files exist for these features (`components/chat/`, `components/docum
 | Styling | Tailwind CSS v4, shadcn/ui, Lucide icons |
 | Database | PostgreSQL 17 + pgvector (Docker) |
 | ORM | Drizzle ORM + Drizzle Kit |
-| AI | Gemini API via `@google/genai` (`gemini-embedding-2`, 1536 dimensions) |
+| AI (embeddings + chat) | Vercel AI SDK (`ai` + `@ai-sdk/google`) — `gemini-embedding-2` (1536 dims) + `gemini-2.5-flash` |
 | PDF parsing | `pdf2json` |
 | Notifications | Sonner |
 
@@ -57,14 +58,14 @@ Upload PDF
   → mark document READY
 ```
 
-**Target RAG flow (upcoming):**
+**RAG chat flow (current):**
 
 ```
 User question
-  → embed query
+  → embed query (Gemini)
   → vector search over document_chunks
   → build prompt with retrieved context
-  → LLM response
+  → stream Gemini answer to the UI
 ```
 
 ---
@@ -74,18 +75,18 @@ User question
 ```
 rag-chatbot/
 ├── app/
-│   ├── (dashboard)/page.tsx      # Home page (upload form)
+│   ├── (dashboard)/page.tsx      # Home page (upload + chat)
 │   ├── api/
-│   │   ├── documents/upload/   # Upload + ingest endpoint
-│   │   ├── documents/extract/  # Dev: extract text from a file path
-│   │   ├── chunk-test/         # Dev: test the text chunker
-│   │   └── health/db/          # Database health check
+│   │   ├── chat/                 # Streaming RAG chat
+│   │   ├── documents/upload/     # Upload + ingest endpoint
+│   │   ├── documents/extract/    # Dev: extract text from a file path
+│   │   ├── chunk-test/           # Dev: test the text chunker
+│   │   ├── retrieval-test/       # Dev: test vector search
+│   │   └── health/db/            # Database health check
 │   └── layout.tsx
 ├── components/
-│   ├── upload/upload-form.tsx    # Upload UI (implemented)
-│   ├── chat/                     # Chat UI stubs (future)
-│   ├── documents/                # Document list stubs (future)
-│   ├── layout/                   # Navbar / sidebar stubs (future)
+│   ├── upload/upload-form.tsx    # Upload UI
+│   ├── chat/                     # Chat UI (streaming)
 │   └── ui/                       # shadcn/ui primitives
 ├── services/                     # Business logic (see Code tour below)
 ├── repositories/                 # Database access (Drizzle)
@@ -137,9 +138,12 @@ upload-form.tsx
 
 | File | Role |
 | --- | --- |
-| `app/(dashboard)/page.tsx` | Home page — renders the upload form |
+| `app/(dashboard)/page.tsx` | Home page — upload form and chat side by side |
 | `components/upload/upload-form.tsx` | File picker, calls `POST /api/documents/upload`, shows loading + toasts |
-| `app/layout.tsx` | Root layout, fonts, Sonner toaster |
+| `components/chat/chat-window.tsx` | Chat UI — streams answers from `POST /api/chat` |
+| `components/chat/chat-input.tsx` | Message input and send button |
+| `components/chat/chat-message.tsx` | User/assistant message bubbles |
+| `app/layout.tsx` | Root layout and Sonner toaster |
 
 ### API routes
 
@@ -149,7 +153,7 @@ upload-form.tsx
 | `app/api/documents/extract/route.ts` | Dev only — extract text from a file path (tests `document-processor.service`) |
 | `app/api/chunk-test/route.ts` | Dev only — chunk raw text (tests `text-chunker.service`) |
 | `app/api/retrieval-test/route.ts` | Dev only — embeds a query and returns the top matching chunks |
-| `app/api/chat/route.ts` | Chat API — retrieves relevant chunks, builds a prompt, and returns a Gemini answer with sources |
+| `app/api/chat/route.ts` | Chat API — retrieves relevant chunks, builds a prompt, and streams a Gemini answer |
 | `app/api/health/db/route.ts` | DB connectivity check |
 
 ### Services (business logic)
@@ -160,9 +164,9 @@ upload-form.tsx
 | `services/ingestion.service.ts` | **Pipeline orchestrator** — extract → chunk → save → set READY/FAILED |
 | `services/document-processor.service.ts` | Reads PDF from disk via `pdf2json`, returns plain text |
 | `services/text-chunker.service.ts` | Splits text into chunks (1000 chars, 200 overlap, word-boundary aware) |
-| `services/embedding.service.ts` | Gemini embeddings (`gemini-embedding-2`, 1536 dimensions) — called during ingestion |
+| `services/embedding.service.ts` | Gemini embeddings via Vercel AI SDK (`gemini-embedding-2`, 1536 dimensions) — called during ingestion |
 | `services/retrieval.service.ts` | Generates a query embedding and performs vector similarity search over stored chunks |
-| `services/chat.service.ts` | Retrieves sources, builds the RAG prompt, and calls Gemini for the final answer |
+| `services/chat.service.ts` | Retrieves sources, builds the RAG prompt, and streams the answer with Vercel AI SDK |
 
 ### Repositories (database access)
 
@@ -181,16 +185,11 @@ upload-form.tsx
 | `db/index.ts` | Re-exports client, schema, enums |
 | `drizzle/` | Versioned SQL migrations — apply with `npm run db:migrate` |
 
-### Future stubs (empty placeholders)
-
-These files exist for upcoming UI features and are **not** part of the current upload pipeline:
-
-- `components/chat/*`, `components/documents/*`, `components/layout/*`
-
 ### What's still missing for full RAG
 
-1. Build the chat UI components and connect them to `/api/chat`
-2. Add source rendering so users can see which chunks supported the answer
+1. Document list / management UI
+2. Optional document scoping in chat (`documentId` filter)
+3. Source citations in the chat UI
 
 ---
 
@@ -227,7 +226,7 @@ If you were previously using OpenAI in this project, rename `OPENAI_API_KEY` to 
 | Variable | Description |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string. Default matches `docker-compose.yaml` (port `5433`, db `rag_db`). |
-| `GEMINI_API_KEY` | Gemini API key. Needed to generate embeddings during ingestion. |
+| `GEMINI_API_KEY` | Gemini API key. Used for embeddings during ingestion and chat answer generation. |
 
 ### 3. Start PostgreSQL
 
@@ -300,6 +299,8 @@ Open [http://localhost:3000](http://localhost:3000) and upload a PDF.
 | `POST` | `/api/documents/upload` | Upload a PDF (`multipart/form-data`, field: `file`). Runs the full ingest pipeline. |
 | `POST` | `/api/documents/extract` | Dev only. JSON body: `{ "filePath": "/absolute/path/to/file.pdf" }`. Returns extracted text. |
 | `POST` | `/api/chunk-test` | Dev only. JSON body: `{ "text": "..." }`. Returns text chunks. |
+| `POST` | `/api/retrieval-test` | Dev only. JSON body: `{ "query": "...", "limit?": number, "documentId?": "uuid" }`. Returns matching chunks. |
+| `POST` | `/api/chat` | JSON body: `{ "message": "...", "documentId?": "uuid", "limit?": number }`. Streams the assistant answer as plain text. |
 | `GET` | `/api/health/db` | Returns database connection info (`current_database`, `current_user`, `version`). |
 
 ### Upload response
@@ -404,9 +405,8 @@ PDFs are stored locally at `uploads/{document-id}.pdf`. This folder is created a
 
 ## Development notes
 
-- The home page lives at `app/(dashboard)/page.tsx` and currently renders only the upload form.
-- Empty stub files remain only for **future** features (chat, retrieval, documents list, layout). Redundant empty duplicates were removed.
-- `embedding.service.ts` generates Gemini embeddings during ingestion and stores them in `document_chunks.embedding`.
+- The home page at `app/(dashboard)/page.tsx` renders upload and chat side by side.
+- `embedding.service.ts` and `chat.service.ts` both use Vercel AI SDK (`ai` + `@ai-sdk/google`).
 - Chunking defaults: **1000 characters** per chunk, **200 character** overlap, with word-boundary awareness.
 - See [Code tour](#code-tour--main-files-and-how-they-connect) for a full walkthrough of how files connect.
 

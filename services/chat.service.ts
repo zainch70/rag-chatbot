@@ -1,4 +1,5 @@
-import { GoogleGenAI } from "@google/genai";
+import { createGoogle } from "@ai-sdk/google";
+import { streamText } from "ai";
 
 import { buildRagPrompt } from "@/lib/prompts";
 
@@ -7,7 +8,7 @@ import { retrievalService } from "./retrieval.service";
 const CHAT_MODEL = "gemini-2.5-flash";
 const DEFAULT_RETRIEVAL_LIMIT = 5;
 
-const ai = new GoogleGenAI({
+const google = createGoogle({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
@@ -18,7 +19,7 @@ export class ChatService {
     }
   }
 
-  async answer(
+  async streamAnswer(
     message: string,
     {
       limit = DEFAULT_RETRIEVAL_LIMIT,
@@ -46,21 +47,10 @@ export class ChatService {
       sources,
     });
 
-    const response = await ai.models.generateContent({
-      model: CHAT_MODEL,
-      contents: prompt,
+    return streamText({
+      model: google(CHAT_MODEL),
+      prompt,
     });
-
-    const answer = response.text?.trim();
-
-    if (!answer) {
-      throw new Error("Chat model returned an empty response.");
-    }
-
-    return {
-      answer,
-      sources,
-    };
   }
 }
 

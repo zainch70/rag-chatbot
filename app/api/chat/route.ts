@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await chatService.answer(message, {
+    const result = await chatService.streamAnswer(message, {
       limit:
         typeof limit === "number"
           ? Math.min(Math.max(limit, 1), 10)
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
       documentId,
     });
 
-    return NextResponse.json(result);
+    return result.toTextStreamResponse();
   } catch (error) {
     console.error("Chat request failed:", error);
 
