@@ -14,11 +14,11 @@ A Next.js application for building a **Retrieval-Augmented Generation (RAG)** ch
 
 ## Planned (not yet implemented)
 
-- Chat API and chat UI
+- Chat UI
 - Document list / management UI
 - Sidebar and navbar layout
 
-Empty stub files exist for these features (`components/chat/`, `components/documents/`, `components/layout/`, `services/chat.service.ts`, `lib/prompts.ts`).
+Empty stub files exist for these features (`components/chat/`, `components/documents/`, `components/layout/`).
 
 ---
 
@@ -102,7 +102,7 @@ rag-chatbot/
 
 ## Code tour — main files and how they connect
 
-This section explains the **implemented** ingestion and retrieval pipeline. Read it top-to-bottom to follow one PDF upload from UI to database, then a query back through vector search.
+This section explains the **implemented** ingestion, retrieval, and chat API pipeline. Read it top-to-bottom to follow one PDF upload from UI to database, then a query through retrieval into Gemini answer generation.
 
 ### Layer overview
 
@@ -149,6 +149,7 @@ upload-form.tsx
 | `app/api/documents/extract/route.ts` | Dev only — extract text from a file path (tests `document-processor.service`) |
 | `app/api/chunk-test/route.ts` | Dev only — chunk raw text (tests `text-chunker.service`) |
 | `app/api/retrieval-test/route.ts` | Dev only — embeds a query and returns the top matching chunks |
+| `app/api/chat/route.ts` | Chat API — retrieves relevant chunks, builds a prompt, and returns a Gemini answer with sources |
 | `app/api/health/db/route.ts` | DB connectivity check |
 
 ### Services (business logic)
@@ -161,6 +162,7 @@ upload-form.tsx
 | `services/text-chunker.service.ts` | Splits text into chunks (1000 chars, 200 overlap, word-boundary aware) |
 | `services/embedding.service.ts` | Gemini embeddings (`gemini-embedding-2`, 1536 dimensions) — called during ingestion |
 | `services/retrieval.service.ts` | Generates a query embedding and performs vector similarity search over stored chunks |
+| `services/chat.service.ts` | Retrieves sources, builds the RAG prompt, and calls Gemini for the final answer |
 
 ### Repositories (database access)
 
@@ -181,16 +183,14 @@ upload-form.tsx
 
 ### Future stubs (empty placeholders)
 
-These files exist for upcoming RAG chat features and are **not** part of the current upload pipeline:
+These files exist for upcoming UI features and are **not** part of the current upload pipeline:
 
-- `services/chat.service.ts`
-- `lib/prompts.ts`
 - `components/chat/*`, `components/documents/*`, `components/layout/*`
 
 ### What's still missing for full RAG
 
-1. Implement `chat.service` + `/api/chat` + chat UI components
-2. Connect the retrieval flow to the future chat experience and source display
+1. Build the chat UI components and connect them to `/api/chat`
+2. Add source rendering so users can see which chunks supported the answer
 
 ---
 
