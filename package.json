@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:generate": "node scripts/drizzle-kit.cjs generate",
+    "db:migrate": "node scripts/drizzle-kit.cjs migrate",
+    "db:studio": "node scripts/drizzle-kit.cjs studio",
+    "db:push": "node scripts/drizzle-kit.cjs push"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

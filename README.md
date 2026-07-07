@@ -166,8 +166,11 @@ docker exec -it rag-postgres psql -U postgres -d rag_db -c "CREATE EXTENSION IF 
 Apply schema migrations:
 
 ```bash
-npx drizzle-kit migrate
+npm run db:migrate
 ```
+
+> **Do not use `drizzle-kit push`.** This project uses versioned SQL migrations only.
+> After changing files in `db/`, run `npm run db:generate` then `npm run db:migrate`.
 
 Confirm the database is reachable:
 
@@ -178,7 +181,7 @@ curl http://localhost:3000/api/health/db
 Or open Drizzle Studio:
 
 ```bash
-npx drizzle-kit studio
+npm run db:studio
 ```
 
 ### 5. Run the dev server
@@ -249,9 +252,11 @@ On failure, the API returns `{ "message": "..." }` with an appropriate HTTP stat
 | `npm run build` | Production build |
 | `npm run start` | Run the production server |
 | `npm run lint` | Run ESLint |
-| `npx drizzle-kit migrate` | Apply database migrations |
-| `npx drizzle-kit studio` | Open Drizzle Studio (DB browser) |
-| `npx drizzle-kit push` | Push schema changes directly (useful in early dev) |
+| `npm run db:generate` | Generate a new SQL migration after schema changes in `db/` |
+| `npm run db:migrate` | Apply pending migrations to the database |
+| `npm run db:studio` | Open Drizzle Studio (DB browser) |
+
+`drizzle-kit push` is **disabled**. Use `db:generate` + `db:migrate` instead.
 
 ---
 
@@ -285,7 +290,7 @@ docker exec -it rag-postgres psql -U postgres -d rag_db -c "CREATE EXTENSION IF 
 
 1. Confirm Docker is running: `docker compose ps`
 2. Confirm `.env` `DATABASE_URL` matches `docker-compose.yaml` (port `5433`, password `12345`)
-3. Run migrations: `npx drizzle-kit migrate`
+3. Run migrations: `npm run db:migrate`
 4. Hit the health endpoint: `GET /api/health/db`
 
 ### Only PDF files are accepted
