@@ -17,7 +17,9 @@ A Next.js application for building a **Retrieval-Augmented Generation (RAG)** ch
 - Vector similarity search (pgvector retrieval)
 - Chat API and chat UI
 - Document list / management UI
-- Sidebar, navbar, and richer upload UX (dropzone, progress)
+- Sidebar and navbar layout
+
+Empty stub files exist for these features (`components/chat/`, `components/documents/`, `components/layout/`, `services/chat.service.ts`, `services/retrieval.service.ts`, `lib/prompts.ts`).
 
 ---
 
@@ -80,20 +82,113 @@ rag-chatbot/
 │   │   └── health/db/          # Database health check
 │   └── layout.tsx
 ├── components/
-│   ├── upload/                   # Upload UI (implemented)
-│   ├── chat/                     # Chat UI (stubs)
-│   ├── documents/                # Document list UI (stubs)
-│   ├── layout/                   # Navbar / sidebar (stubs)
+│   ├── upload/upload-form.tsx    # Upload UI (implemented)
+│   ├── chat/                     # Chat UI stubs (future)
+│   ├── documents/                # Document list stubs (future)
+│   ├── layout/                   # Navbar / sidebar stubs (future)
 │   └── ui/                       # shadcn/ui primitives
-├── services/                     # Business logic
+├── services/                     # Business logic (see Code tour below)
 ├── repositories/                 # Database access (Drizzle)
 ├── db/                           # Schema, client, enums
 ├── drizzle/                      # SQL migrations
-├── lib/                          # Shared utilities
+├── lib/utils.ts                  # Shared utilities (cn helper)
 ├── types/                        # TypeScript types
+├── scripts/drizzle-kit.cjs       # Drizzle CLI wrapper (blocks push)
 ├── uploads/                      # Stored PDF files (local)
 └── docker-compose.yaml           # PostgreSQL + pgvector
 ```
+
+---
+
+## Code tour — main files and how they connect
+
+This section explains the **implemented** ingestion pipeline. Read it top-to-bottom to follow one PDF upload from UI to database.
+
+### Layer overview
+
+```
+Components  →  API routes  →  Services  →  Repositories  →  Database
+   (UI)         (HTTP)      (logic)        (SQL/Drizzle)     (Postgres)
+```
+
+| Layer | Responsibility | Talks to |
+| --- | --- | --- |
+| Components | User interface | API routes (fetch) |
+| API routes | HTTP entry, orchestration | Services |
+| Services | Business rules, processing | Other services + repositories |
+| Repositories | CRUD queries | `db/client.ts` |
+| `db/` | Schema + connection | PostgreSQL |
+
+### End-to-end upload flow
+
+```
+upload-form.tsx
+  → POST /api/documents/upload
+    → document.service.ts        (save file + create document row)
+    → ingestion.service.ts       (orchestrate processing)
+      → document-processor.service.ts  (PDF → text)
+      → text-chunker.service.ts        (text → chunks)
+      → chunk.repository.ts            (save chunks)
+    → document.service.ts        (mark READY or FAILED)
+```
+
+### Frontend
+
+| File | Role |
+| --- | --- |
+| `app/(dashboard)/page.tsx` | Home page — renders the upload form |
+| `components/upload/upload-form.tsx` | File picker, calls `POST /api/documents/upload`, shows loading + toasts |
+| `app/layout.tsx` | Root layout, fonts, Sonner toaster |
+
+### API routes
+
+| File | Role |
+| --- | --- |
+| `app/api/documents/upload/route.ts` | **Main endpoint.** Receives PDF, calls `documentService.upload()` then `ingestionService.process()` |
+| `app/api/documents/extract/route.ts` | Dev only — extract text from a file path (tests `document-processor.service`) |
+| `app/api/chunk-test/route.ts` | Dev only — chunk raw text (tests `text-chunker.service`) |
+| `app/api/health/db/route.ts` | DB connectivity check |
+
+### Services (business logic)
+
+| File | Role |
+| --- | --- |
+| `services/document.service.ts` | Validates PDF, saves to `uploads/{id}.pdf`, creates `documents` row, updates status |
+| `services/ingestion.service.ts` | **Pipeline orchestrator** — extract → chunk → save → set READY/FAILED |
+| `services/document-processor.service.ts` | Reads PDF from disk via `pdf2json`, returns plain text |
+| `services/text-chunker.service.ts` | Splits text into chunks (1000 chars, 200 overlap, word-boundary aware) |
+| `services/embedding.service.ts` | OpenAI embeddings (`text-embedding-3-small`) — **exists, not wired into ingestion yet** |
+
+### Repositories (database access)
+
+| File | Role |
+| --- | --- |
+| `repositories/document.repository.ts` | `create`, `findById`, `updateStatus` on `documents` |
+| `repositories/chunk.repository.ts` | `createMany`, `findByDocumentId` on `document_chunks` |
+
+### Database layer
+
+| File | Role |
+| --- | --- |
+| `db/schema.ts` | Table definitions: `documents`, `document_chunks` (with `vector(1536)` embedding column) |
+| `db/enums.ts` | `document_status` enum: `UPLOADING`, `PROCESSING`, `READY`, `FAILED` |
+| `db/client.ts` | Drizzle + Postgres client (uses `DATABASE_URL`) |
+| `db/index.ts` | Re-exports client, schema, enums |
+| `drizzle/` | Versioned SQL migrations — apply with `npm run db:migrate` |
+
+### Future stubs (empty placeholders)
+
+These files exist for upcoming RAG chat features and are **not** part of the current upload pipeline:
+
+- `services/chat.service.ts`, `services/retrieval.service.ts`
+- `lib/prompts.ts`
+- `components/chat/*`, `components/documents/*`, `components/layout/*`
+
+### What's still missing for full RAG
+
+1. Call `embedding.service` during ingestion and store vectors in `document_chunks.embedding`
+2. Implement `retrieval.service` — pgvector similarity search
+3. Implement `chat.service` + `/api/chat` + chat UI components
 
 ---
 
@@ -306,9 +401,10 @@ PDFs are stored locally at `uploads/{document-id}.pdf`. This folder is created a
 ## Development notes
 
 - The home page lives at `app/(dashboard)/page.tsx` and currently renders only the upload form.
-- Several UI and service files exist as **empty stubs** (`chat`, `retrieval`, `layout` components, etc.) — placeholders for upcoming work.
+- Empty stub files remain only for **future** features (chat, retrieval, documents list, layout). Redundant empty duplicates were removed.
 - `embedding.service.ts` can generate OpenAI embeddings but is **not yet called** during ingestion.
 - Chunking defaults: **1000 characters** per chunk, **200 character** overlap, with word-boundary awareness.
+- See [Code tour](#code-tour--main-files-and-how-they-connect) for a full walkthrough of how files connect.
 
 ---
 
