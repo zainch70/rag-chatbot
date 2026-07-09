@@ -9,7 +9,7 @@ A Next.js **RAG (Retrieval-Augmented Generation)** chatbot over your own PDF doc
 - Starter prompt suggestions on the empty chat screen
 - Custom replace-document dialog when switching PDFs
 - PDF upload validation (`.pdf` only, max 25 MB, basic PDF signature check)
-- Local file storage in `uploads/`
+- Local file storage in `uploads/` during development; in-memory processing on Vercel (no writable disk)
 - PDF text extraction (`pdf2json`)
 - Text chunking (character-based, with overlap)
 - Gemini embeddings via Vercel AI SDK (`gemini-embedding-2`, 1536 dimensions) — during ingestion and query retrieval
@@ -59,14 +59,19 @@ UI (components) → API routes → Services → Repositories → Database
 
 ```
 Upload PDF
-  → save file to uploads/
+  → validate file (type, size, PDF signature)
+  → store PDF:
+      • local dev: save to uploads/{id}.pdf
+      • Vercel/serverless: keep in server memory only (storage_path: memory://...)
   → create document record (status: PROCESSING)
-  → extract text from PDF
+  → extract text from PDF (buffer or disk path)
   → split text into chunks
   → generate embeddings for each chunk
   → save chunks + embeddings to document_chunks
   → mark document READY
 ```
+
+On Vercel, the original PDF is **not** persisted to disk. Only document metadata and chunks/embeddings remain in PostgreSQL. That is enough for RAG chat, but not for re-downloading or re-processing the raw PDF later without uploading again.
 
 **RAG chat flow (current):**
 
@@ -107,12 +112,14 @@ rag-chatbot/
 ├── drizzle/                      # SQL migrations
 ├── lib/
 │   ├── prompts.ts                # RAG prompt builder
+│   ├── parse-pdf-text.ts         # Shared pdf2json text extraction helper
+│   ├── runtime-storage.ts        # Detects serverless runtimes (Vercel/Lambda)
 │   ├── upload-document.ts        # Client upload helper
 │   ├── validate-pdf-upload.ts    # Shared PDF validation rules
 │   └── utils.ts                  # Shared utilities (cn helper)
 ├── types/                        # TypeScript types
 ├── scripts/drizzle-kit.cjs       # Drizzle CLI wrapper (blocks push)
-├── uploads/                      # Stored PDF files (local)
+├── uploads/                      # Stored PDF files (local dev only)
 └── docker-compose.yaml           # PostgreSQL + pgvector
 ```
 
@@ -143,9 +150,9 @@ Components  →  API routes  →  Services  →  Repositories  →  Database
 chat-input.tsx (+ button)
   → validate PDF client-side (lib/validate-pdf-upload.ts)
   → POST /api/documents/upload (lib/upload-document.ts)
-    → document.service.ts        (validate + save file + create document row)
+    → document.service.ts        (validate + save locally or keep in memory + create document row)
     → ingestion.service.ts       (orchestrate processing)
-      → document-processor.service.ts  (PDF → text)
+      → document-processor.service.ts  (PDF buffer or file path → text)
       → text-chunker.service.ts        (text → chunks)
       → embedding.service.ts           (chunks → vectors)
       → chunk.repository.ts            (save chunks)
@@ -187,7 +194,7 @@ chat-window.tsx
 
 | File | Role |
 | --- | --- |
-| `app/api/documents/upload/route.ts` | **Main endpoint.** Receives PDF, calls `documentService.upload()` then `ingestionService.process()` |
+| `app/api/documents/upload/route.ts` | **Main endpoint.** Receives PDF, calls `documentService.upload()` then `ingestionService.process()`. Uses Node.js runtime with `maxDuration = 60` for serverless ingestion. |
 | `app/api/documents/extract/route.ts` | Dev only — extract text from a file path (tests `document-processor.service`) |
 | `app/api/chunk-test/route.ts` | Dev only — chunk raw text (tests `text-chunker.service`) |
 | `app/api/retrieval-test/route.ts` | Dev only — embeds a query and returns the top matching chunks |
@@ -198,9 +205,9 @@ chat-window.tsx
 
 | File | Role |
 | --- | --- |
-| `services/document.service.ts` | Validates PDF, saves to `uploads/{id}.pdf`, creates `documents` row, updates status |
-| `services/ingestion.service.ts` | **Pipeline orchestrator** — extract → chunk → save → set READY/FAILED |
-| `services/document-processor.service.ts` | Reads PDF from disk via `pdf2json`, returns plain text |
+| `services/document.service.ts` | Validates PDF, saves to `uploads/{id}.pdf` locally or uses `memory://...` on serverless, creates `documents` row, updates status |
+| `services/ingestion.service.ts` | **Pipeline orchestrator** — extract from buffer or disk → chunk → save → set READY/FAILED |
+| `services/document-processor.service.ts` | Extracts text via `pdf2json` from an in-memory buffer or a file path |
 | `services/text-chunker.service.ts` | Splits text into chunks (1000 chars, 200 overlap, word-boundary aware) |
 | `services/embedding.service.ts` | Gemini embeddings via Vercel AI SDK (`gemini-embedding-2`, 1536 dimensions) — used during ingestion and retrieval |
 | `services/retrieval.service.ts` | Embeds the user query and performs vector similarity search over stored chunks |
@@ -211,6 +218,8 @@ chat-window.tsx
 | File | Role |
 | --- | --- |
 | `lib/prompts.ts` | Builds the RAG system/user prompt from the question and retrieved chunks |
+| `lib/parse-pdf-text.ts` | Converts pdf2json output into plain text |
+| `lib/runtime-storage.ts` | Detects Vercel/Lambda and chooses local disk vs in-memory upload handling |
 | `lib/upload-document.ts` | Client helper for `POST /api/documents/upload` |
 | `lib/validate-pdf-upload.ts` | Shared PDF validation rules used by client and server |
 | `lib/utils.ts` | `cn()` helper for Tailwind class merging |
@@ -342,6 +351,55 @@ Open [http://localhost:3000](http://localhost:3000), tap `+` to upload a PDF, th
 
 ---
 
+## Deploying to Vercel
+
+This app works on Vercel with a hosted PostgreSQL database that supports pgvector (for example, Neon).
+
+### 1. Database setup
+
+1. Create a Neon project and copy the connection string.
+2. Enable pgvector on the database:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+3. Apply migrations from your machine against the production database:
+
+```bash
+DATABASE_URL="your_neon_connection_string" npm run db:migrate
+```
+
+### 2. Vercel environment variables
+
+Set these in the Vercel project settings:
+
+| Variable | Description |
+| --- | --- |
+| `DATABASE_URL` | Neon PostgreSQL connection string |
+| `GEMINI_API_KEY` | Gemini API key for embeddings and chat |
+
+Vercel sets `VERCEL=1` automatically. The app uses that to skip local disk writes during upload.
+
+### 3. File storage on serverless
+
+Vercel serverless functions have a **read-only filesystem**. The app does not write to `/var/task/uploads`.
+
+Instead, on Vercel:
+
+- The uploaded PDF stays in the function's memory for the duration of the upload request
+- Text is extracted from that in-memory buffer
+- Chunks and embeddings are saved to PostgreSQL
+- The raw PDF is discarded when the request ends
+
+This is enough for RAG chat. If you later need durable PDF storage or re-download support, add object storage such as Vercel Blob or S3.
+
+### 4. Timeouts
+
+Large PDFs can take time to parse, chunk, and embed. The upload route sets `maxDuration = 60` seconds. On Vercel Hobby, function limits may still be lower than Pro, so very large documents may time out during ingestion.
+
+---
+
 ## API reference
 
 | Method | Endpoint | Description |
@@ -381,7 +439,7 @@ On success, `POST /api/chat` returns a **plain-text stream** (not JSON). Errors 
 | `filename` | text | Original upload name |
 | `mime_type` | text | Must be `application/pdf` |
 | `status` | enum | `UPLOADING`, `PROCESSING`, `READY`, `FAILED` |
-| `storage_path` | text | Absolute path to file in `uploads/` |
+| `storage_path` | text | Local dev: path in `uploads/`. Vercel: `memory://{id}.pdf` (marker only; file is not stored on disk) |
 | `created_at` / `updated_at` | timestamp | Auto-managed |
 
 ### `document_chunks`
@@ -455,9 +513,19 @@ Upload validation is limited to `.pdf` files with a maximum size of **25 MB**. T
 
 The UI tracks one active `documentId` at a time. Chat requests only retrieve chunks from that document, so answers do not mix in older PDFs already stored in the database.
 
-### `uploads/` folder
+### `uploads/` folder (local dev only)
 
-PDFs are stored locally at `uploads/{document-id}.pdf`. This folder is created automatically on first upload. Do not commit uploaded files to git.
+On your machine, PDFs are stored at `uploads/{document-id}.pdf`. This folder is created automatically on first upload. Do not commit uploaded files to git.
+
+On Vercel, this folder is not used.
+
+### `ENOENT: no such file or directory, mkdir '/var/task/uploads'`
+
+This means the app tried to write uploads to disk on Vercel. Deploy a version that uses `lib/runtime-storage.ts` and in-memory upload handling in `services/document.service.ts`. Vercel must have `VERCEL=1` set (automatic on Vercel deployments).
+
+### Upload succeeds locally but times out on Vercel
+
+Ingestion runs inside the upload request. Try a smaller PDF first, upgrade the Vercel plan for longer function duration, or move ingestion to a background job later.
 
 ---
 
