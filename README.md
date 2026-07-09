@@ -4,26 +4,32 @@ A Next.js **RAG (Retrieval-Augmented Generation)** chatbot over your own PDF doc
 
 ## What works today
 
-- PDF upload via the web UI
+- Chat-first UI with PDF upload via a `+` button in the composer (ChatGPT-style)
+- One active PDF at a time — chat is scoped to the uploaded document via `documentId`
+- Starter prompt suggestions on the empty chat screen
+- Custom replace-document dialog when switching PDFs
+- PDF upload validation (`.pdf` only, max 25 MB, basic PDF signature check)
 - Local file storage in `uploads/`
 - PDF text extraction (`pdf2json`)
 - Text chunking (character-based, with overlap)
 - Gemini embeddings via Vercel AI SDK (`gemini-embedding-2`, 1536 dimensions) — during ingestion and query retrieval
-- Vector similarity retrieval over stored chunks
-- RAG prompt building from retrieved chunks (`lib/prompts.ts`)
+- Vector similarity retrieval over stored chunks for the active document only
+- RAG prompt building with natural fallback responses (`lib/prompts.ts`)
+- Retrieval relevance guard before prompting the model (`services/chat.service.ts`)
 - Streaming chat API and UI powered by Vercel AI SDK + Gemini (`gemini-2.5-flash`)
 - Document and chunk persistence in PostgreSQL
 - Document status lifecycle: `UPLOADING` → `PROCESSING` → `READY` / `FAILED`
 - Dev-only test endpoints for extraction, chunking, and retrieval
+- Dismissible upload/chat toasts via Sonner
 
 ## Planned enhancements
 
 These are **not** implemented yet:
 
 - Document list / management UI
-- Navbar and sidebar layout
-- Document picker in chat (the API supports `documentId`, but the UI does not send it yet)
+- Multi-document picker (switch between previously uploaded PDFs without re-uploading)
 - Source citations in the chat UI
+- Navbar and sidebar layout
 
 ---
 
@@ -65,9 +71,11 @@ Upload PDF
 **RAG chat flow (current):**
 
 ```
-User question
+User question + active documentId
+  → verify document exists and is READY
   → embed query (Gemini)
-  → vector search over document_chunks
+  → vector search over that document's chunks only
+  → filter weak matches by similarity threshold
   → build prompt with retrieved context
   → stream Gemini answer to the UI
 ```
@@ -79,7 +87,7 @@ User question
 ```
 rag-chatbot/
 ├── app/
-│   ├── (dashboard)/page.tsx      # Home page (upload + chat)
+│   ├── (dashboard)/page.tsx      # Home page (chat workspace)
 │   ├── api/
 │   │   ├── chat/                 # Streaming RAG chat
 │   │   ├── documents/upload/     # Upload + ingest endpoint
@@ -87,10 +95,11 @@ rag-chatbot/
 │   │   ├── chunk-test/           # Dev: test the text chunker
 │   │   ├── retrieval-test/       # Dev: test vector search
 │   │   └── health/db/            # Database health check
+│   ├── icon.svg                  # App favicon
+│   ├── apple-icon.svg            # Apple touch icon
 │   └── layout.tsx
 ├── components/
-│   ├── upload/upload-form.tsx    # Upload UI
-│   ├── chat/                     # Chat UI (streaming)
+│   ├── chat/                     # Chat UI (streaming, upload, prompts)
 │   └── ui/                       # shadcn/ui primitives
 ├── services/                     # Business logic (see Code tour below)
 ├── repositories/                 # Database access (Drizzle)
@@ -98,6 +107,8 @@ rag-chatbot/
 ├── drizzle/                      # SQL migrations
 ├── lib/
 │   ├── prompts.ts                # RAG prompt builder
+│   ├── upload-document.ts        # Client upload helper
+│   ├── validate-pdf-upload.ts    # Shared PDF validation rules
 │   └── utils.ts                  # Shared utilities (cn helper)
 ├── types/                        # TypeScript types
 ├── scripts/drizzle-kit.cjs       # Drizzle CLI wrapper (blocks push)
@@ -129,26 +140,32 @@ Components  →  API routes  →  Services  →  Repositories  →  Database
 ### End-to-end upload flow
 
 ```
-upload-form.tsx
-  → POST /api/documents/upload
-    → document.service.ts        (save file + create document row)
+chat-input.tsx (+ button)
+  → validate PDF client-side (lib/validate-pdf-upload.ts)
+  → POST /api/documents/upload (lib/upload-document.ts)
+    → document.service.ts        (validate + save file + create document row)
     → ingestion.service.ts       (orchestrate processing)
       → document-processor.service.ts  (PDF → text)
       → text-chunker.service.ts        (text → chunks)
       → embedding.service.ts           (chunks → vectors)
       → chunk.repository.ts            (save chunks)
     → document.service.ts        (mark READY or FAILED)
+  → chat-window.tsx stores active documentId + filename
 ```
+
+If a PDF is already active, the UI shows a custom replace dialog before switching documents and clearing the current chat.
 
 ### End-to-end chat flow
 
 ```
 chat-window.tsx
-  → POST /api/chat
+  → POST /api/chat { message, documentId }
     → chat.service.ts
+      → document.repository.ts   (verify document is READY)
       → retrieval.service.ts
         → embedding.service.ts   (query embedding)
-        → chunk.repository.ts    (vector search)
+        → chunk.repository.ts    (vector search for active document only)
+      → relevance filter on similarity scores
       → lib/prompts.ts           (build RAG prompt)
       → streamText (Gemini)      (stream answer to UI)
 ```
@@ -157,12 +174,14 @@ chat-window.tsx
 
 | File | Role |
 | --- | --- |
-| `app/(dashboard)/page.tsx` | Home page — upload form and chat side by side |
-| `components/upload/upload-form.tsx` | File picker, calls `POST /api/documents/upload`, shows loading + toasts |
-| `components/chat/chat-window.tsx` | Chat UI — streams answers from `POST /api/chat` |
-| `components/chat/chat-input.tsx` | Message input and send button |
+| `app/(dashboard)/page.tsx` | Home page — centered chat workspace |
+| `components/chat/chat-window.tsx` | Chat UI, starter prompts, active document state, streams answers from `POST /api/chat` |
+| `components/chat/chat-input.tsx` | Composer with `+` upload, message input, and send button |
+| `components/chat/replace-document-dialog.tsx` | Custom confirmation when replacing the active PDF |
 | `components/chat/chat-message.tsx` | User/assistant message bubbles |
-| `app/layout.tsx` | Root layout and Sonner toaster |
+| `components/chat/chat-empty-icon.tsx` | Empty-state icon |
+| `app/layout.tsx` | Root layout, metadata, and Sonner toaster |
+| `app/icon.svg` | Favicon |
 
 ### API routes
 
@@ -172,7 +191,7 @@ chat-window.tsx
 | `app/api/documents/extract/route.ts` | Dev only — extract text from a file path (tests `document-processor.service`) |
 | `app/api/chunk-test/route.ts` | Dev only — chunk raw text (tests `text-chunker.service`) |
 | `app/api/retrieval-test/route.ts` | Dev only — embeds a query and returns the top matching chunks |
-| `app/api/chat/route.ts` | Chat API — retrieves relevant chunks, builds a prompt, and streams a Gemini answer |
+| `app/api/chat/route.ts` | Chat API — requires `documentId`, retrieves relevant chunks for that document, builds a prompt, and streams a Gemini answer |
 | `app/api/health/db/route.ts` | DB connectivity check |
 
 ### Services (business logic)
@@ -185,13 +204,15 @@ chat-window.tsx
 | `services/text-chunker.service.ts` | Splits text into chunks (1000 chars, 200 overlap, word-boundary aware) |
 | `services/embedding.service.ts` | Gemini embeddings via Vercel AI SDK (`gemini-embedding-2`, 1536 dimensions) — used during ingestion and retrieval |
 | `services/retrieval.service.ts` | Embeds the user query and performs vector similarity search over stored chunks |
-| `services/chat.service.ts` | Retrieves sources, builds the RAG prompt, and streams the answer with Vercel AI SDK |
+| `services/chat.service.ts` | Verifies active document, retrieves sources, filters weak matches, builds the RAG prompt, and streams the answer with Vercel AI SDK |
 
 ### Supporting modules
 
 | File | Role |
 | --- | --- |
 | `lib/prompts.ts` | Builds the RAG system/user prompt from the question and retrieved chunks |
+| `lib/upload-document.ts` | Client helper for `POST /api/documents/upload` |
+| `lib/validate-pdf-upload.ts` | Shared PDF validation rules used by client and server |
 | `lib/utils.ts` | `cn()` helper for Tailwind class merging |
 
 ### Repositories (database access)
@@ -310,7 +331,14 @@ npm run db:studio
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), upload a PDF, then ask questions in the chat panel on the right.
+Open [http://localhost:3000](http://localhost:3000), tap `+` to upload a PDF, then ask questions in the chat panel.
+
+### Using the UI
+
+1. Tap the `+` button in the chat composer and choose a PDF.
+2. Wait for the upload and ingestion to finish — the active document badge appears when ready.
+3. Ask a question or use one of the starter prompts.
+4. To switch PDFs, tap `+` again and confirm in the replace dialog. Only one PDF is active at a time, and the chat resets for the new document.
 
 ---
 
@@ -318,11 +346,11 @@ Open [http://localhost:3000](http://localhost:3000), upload a PDF, then ask ques
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `POST` | `/api/documents/upload` | Upload a PDF (`multipart/form-data`, field: `file`). Runs the full ingest pipeline. |
+| `POST` | `/api/documents/upload` | Upload a PDF (`multipart/form-data`, field: `file`). Validates file type/size/signature, then runs the full ingest pipeline. |
 | `POST` | `/api/documents/extract` | Dev only. JSON body: `{ "filePath": "/absolute/path/to/file.pdf" }`. Returns extracted text. |
 | `POST` | `/api/chunk-test` | Dev only. JSON body: `{ "text": "..." }`. Returns text chunks. |
 | `POST` | `/api/retrieval-test` | Dev only. JSON body: `{ "query": "...", "limit?": number, "documentId?": "uuid" }`. Returns matching chunks. |
-| `POST` | `/api/chat` | JSON body: `{ "message": "...", "documentId?": "uuid", "limit?": number }`. Streams the assistant answer as plain text. |
+| `POST` | `/api/chat` | JSON body: `{ "message": "...", "documentId": "uuid", "limit?": number }`. Requires `documentId`. Streams the assistant answer as plain text. |
 | `GET` | `/api/health/db` | Returns database connection info (`current_database`, `current_user`, `version`). |
 
 ### Upload response
@@ -334,11 +362,11 @@ Open [http://localhost:3000](http://localhost:3000), upload a PDF, then ask ques
 }
 ```
 
-On failure, the API returns `{ "message": "..." }` with an appropriate HTTP status.
+On failure, the API returns `{ "message": "..." }` with an appropriate HTTP status. Validation errors (invalid type, empty file, file too large, invalid PDF signature) return **400**.
 
 ### Chat response
 
-On success, `POST /api/chat` returns a **plain-text stream** (not JSON). Errors return JSON with `{ "message": "..." }`.
+On success, `POST /api/chat` returns a **plain-text stream** (not JSON). Errors return JSON with `{ "message": "..." }`. Missing `documentId`, unknown documents, and documents still processing return **400**.
 
 ---
 
@@ -421,7 +449,11 @@ docker exec -it rag-postgres psql -U postgres -d rag_db -c "CREATE EXTENSION IF 
 
 ### Only PDF files are accepted
 
-Upload validation is intentionally limited to `application/pdf`. Other formats are not supported yet.
+Upload validation is limited to `.pdf` files with a maximum size of **25 MB**. The client and server both check file extension, MIME type, and a basic `%PDF` file signature.
+
+### Chat answers come from the active PDF only
+
+The UI tracks one active `documentId` at a time. Chat requests only retrieve chunks from that document, so answers do not mix in older PDFs already stored in the database.
 
 ### `uploads/` folder
 
@@ -431,9 +463,11 @@ PDFs are stored locally at `uploads/{document-id}.pdf`. This folder is created a
 
 ## Development notes
 
-- The home page at `app/(dashboard)/page.tsx` renders upload and chat side by side.
+- The home page at `app/(dashboard)/page.tsx` renders a single centered chat workspace.
+- PDF upload happens from the `+` button in `components/chat/chat-input.tsx`.
 - `embedding.service.ts` and `chat.service.ts` both use Vercel AI SDK (`ai` + `@ai-sdk/google`).
 - Chunking defaults: **1000 characters** per chunk, **200 character** overlap, with word-boundary awareness.
+- Retrieval uses a similarity threshold before building the chat prompt to reduce weak/generic answers.
 - Dev test routes (`/api/chunk-test`, `/api/documents/extract`, `/api/retrieval-test`) are for local debugging only — not used by the UI.
 - See [Code tour](#code-tour--main-files-and-how-they-connect) for a full walkthrough of how files connect.
 

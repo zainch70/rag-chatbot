@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { documentService } from "@/services/document.service";
 import { ingestionService } from "@/services/ingestion.service";
+import { PdfValidationError } from "@/lib/validate-pdf-upload";
 
 export async function POST(request: Request) {
   try {
@@ -41,6 +42,17 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     console.error(error);
+
+    if (error instanceof PdfValidationError) {
+      return NextResponse.json(
+        {
+          message: error.message,
+        },
+        {
+          status: 400,
+        }
+      );
+    }
 
     return NextResponse.json(
       {

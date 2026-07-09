@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { chatService } from "@/services/chat.service";
+import { chatService, ChatRequestError } from "@/services/chat.service";
 
 export async function POST(request: Request) {
   try {
@@ -27,6 +27,17 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!documentId?.trim()) {
+      return NextResponse.json(
+        {
+          message: "documentId is required. Upload a PDF first.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
     const result = await chatService.streamAnswer(message, {
       limit:
         typeof limit === "number"
@@ -38,6 +49,17 @@ export async function POST(request: Request) {
     return result.toTextStreamResponse();
   } catch (error) {
     console.error("Chat request failed:", error);
+
+    if (error instanceof ChatRequestError) {
+      return NextResponse.json(
+        {
+          message: error.message,
+        },
+        {
+          status: 400,
+        }
+      );
+    }
 
     return NextResponse.json(
       {

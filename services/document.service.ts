@@ -3,23 +3,25 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 
 import { documentRepository } from "@/repositories/document.repository";
+import {
+  PdfValidationError,
+  validatePdfBuffer,
+  validatePdfMetadata,
+} from "@/lib/validate-pdf-upload";
 
 export class DocumentService {
   async upload(file: File) {
-    // Validate file
     if (!file) {
-      throw new Error("No file uploaded.");
+      throw new PdfValidationError("No file uploaded.");
     }
 
-    if (file.type !== "application/pdf") {
-      throw new Error("Only PDF files are allowed.");
-    }
+    validatePdfMetadata(file);
 
-    // Generate unique document id
+    const buffer = Buffer.from(await file.arrayBuffer());
+    validatePdfBuffer(buffer);
+
     const documentId = randomUUID();
-
-    // Storage information
-    const extension = path.extname(file.name);
+    const extension = path.extname(file.name).toLowerCase() || ".pdf";
     const uploadsDirectory = path.join(process.cwd(), "uploads");
 
     await mkdir(uploadsDirectory, {
@@ -33,11 +35,6 @@ export class DocumentService {
       storageFilename
     );
 
-    // Save PDF locally
-    const buffer = Buffer.from(
-      await file.arrayBuffer()
-    );
-
     await writeFile(storagePath, buffer);
 
     // Save document metadata
@@ -47,7 +44,7 @@ export class DocumentService {
         title: path.parse(file.name).name,
         filename: file.name,
         storagePath,
-        mimeType: file.type,
+        mimeType: file.type || "application/pdf",
 
         // Upload completed.
         // Next step is processing the document.
