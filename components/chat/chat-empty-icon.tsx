@@ -1,12 +1,16 @@
 const PETAL_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
 
-export default function ChatEmptyIcon() {
+export default function ChatEmptyIcon({
+  className = "h-6 w-6 text-muted-foreground",
+}: {
+  className?: string;
+}) {
   return (
     <svg
       viewBox="0 0 48 48"
       fill="none"
       aria-hidden="true"
-      className="h-6 w-6 text-muted-foreground"
+      className={className}
     >
       <circle
         cx="24"

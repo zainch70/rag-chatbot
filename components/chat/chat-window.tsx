@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileText, MessageSquareText } from "lucide-react";
+import { FileText } from "lucide-react";
 import { toast } from "sonner";
 
 import ChatEmptyIcon from "./chat-empty-icon";
@@ -171,7 +171,7 @@ export default function ChatWindow() {
       <CardHeader className="shrink-0 border-b border-border/60 px-5 py-4">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <MessageSquareText className="h-4 w-4 text-muted-foreground" />
+            <ChatEmptyIcon className="h-4 w-4 text-muted-foreground" />
             <CardTitle className="text-base font-semibold">
               Document chat
             </CardTitle>
