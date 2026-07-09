@@ -4,6 +4,9 @@ import { documentService } from "@/services/document.service";
 import { ingestionService } from "@/services/ingestion.service";
 import { PdfValidationError } from "@/lib/validate-pdf-upload";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
@@ -22,12 +25,13 @@ export async function POST(request: Request) {
     }
 
     // Upload the file and create the document record
-    const document = await documentService.upload(file);
+    const { document, buffer } = await documentService.upload(file);
 
     // Process the uploaded document
     await ingestionService.process({
       id: document.id,
       storagePath: document.storagePath,
+      pdfBuffer: buffer,
     });
 
     // Return the latest document status

@@ -4,6 +4,10 @@ import path from "path";
 
 import { documentRepository } from "@/repositories/document.repository";
 import {
+  getLocalUploadsDirectory,
+  isServerlessRuntime,
+} from "@/lib/runtime-storage";
+import {
   PdfValidationError,
   validatePdfBuffer,
   validatePdfMetadata,
@@ -22,36 +26,37 @@ export class DocumentService {
 
     const documentId = randomUUID();
     const extension = path.extname(file.name).toLowerCase() || ".pdf";
-    const uploadsDirectory = path.join(process.cwd(), "uploads");
-
-    await mkdir(uploadsDirectory, {
-      recursive: true,
-    });
-
     const storageFilename = `${documentId}${extension}`;
+    const useServerlessStorage = isServerlessRuntime();
 
-    const storagePath = path.join(
-      uploadsDirectory,
-      storageFilename
-    );
+    let storagePath: string;
 
-    await writeFile(storagePath, buffer);
+    if (useServerlessStorage) {
+      storagePath = `memory://${storageFilename}`;
+    } else {
+      const uploadsDirectory = getLocalUploadsDirectory();
 
-    // Save document metadata
-    const document =
-      await documentRepository.create({
-        id: documentId,
-        title: path.parse(file.name).name,
-        filename: file.name,
-        storagePath,
-        mimeType: file.type || "application/pdf",
-
-        // Upload completed.
-        // Next step is processing the document.
-        status: "PROCESSING",
+      await mkdir(uploadsDirectory, {
+        recursive: true,
       });
 
-    return document;
+      storagePath = path.join(uploadsDirectory, storageFilename);
+      await writeFile(storagePath, buffer);
+    }
+
+    const document = await documentRepository.create({
+      id: documentId,
+      title: path.parse(file.name).name,
+      filename: file.name,
+      storagePath,
+      mimeType: file.type || "application/pdf",
+      status: "PROCESSING",
+    });
+
+    return {
+      document,
+      buffer,
+    };
   }
 
   async updateStatus(

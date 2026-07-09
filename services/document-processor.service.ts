@@ -1,12 +1,12 @@
 import PDFParser from "pdf2json";
 
+import { parsePdfDataToText } from "@/lib/parse-pdf-text";
+
 import type { ExtractedPage } from "@/types/document";
 
 export class DocumentProcessorService {
-  async extractText(filePath: string): Promise<ExtractedPage> {
-    return new Promise((resolve, reject) => {
-      const pdfParser = new PDFParser();
-
+  private extractFromParser(pdfParser: PDFParser) {
+    return new Promise<ExtractedPage>((resolve, reject) => {
       pdfParser.on("pdfParser_dataError", (error) => {
         const message =
           error instanceof Error ? error.message : error.parserError.message;
@@ -15,19 +15,25 @@ export class DocumentProcessorService {
       });
 
       pdfParser.on("pdfParser_dataReady", (pdfData) => {
-        const text = pdfData.Pages.map((page) =>
-          page.Texts.map((textItem) =>
-            textItem.R.map((run) => decodeURIComponent(run.T)).join("")
-          ).join("")
-        ).join("\n\n");
-
         resolve({
-          text: text.trim(),
+          text: parsePdfDataToText(pdfData),
         });
       });
-
-      pdfParser.loadPDF(filePath);
     });
+  }
+
+  async extractTextFromBuffer(buffer: Buffer): Promise<ExtractedPage> {
+    const pdfParser = new PDFParser();
+    const result = this.extractFromParser(pdfParser);
+    pdfParser.parseBuffer(buffer);
+    return result;
+  }
+
+  async extractText(filePath: string): Promise<ExtractedPage> {
+    const pdfParser = new PDFParser();
+    const result = this.extractFromParser(pdfParser);
+    pdfParser.loadPDF(filePath);
+    return result;
   }
 }
 

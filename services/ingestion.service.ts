@@ -9,6 +9,7 @@ export class IngestionService {
   async process(document: {
     id: string;
     storagePath: string;
+    pdfBuffer?: Buffer;
   }) {
     try {
       console.log("\n========== INGESTION START ==========");
@@ -22,10 +23,13 @@ export class IngestionService {
       console.log("✅ Status updated");
 
       console.log("2️⃣ Extracting text from PDF");
-      const extracted =
-        await documentProcessorService.extractText(
-          document.storagePath
-        );
+      const extracted = document.pdfBuffer
+        ? await documentProcessorService.extractTextFromBuffer(
+            document.pdfBuffer
+          )
+        : await documentProcessorService.extractText(
+            document.storagePath
+          );
 
       console.log(
         `✅ Text extracted (${extracted.text.length} characters)`
