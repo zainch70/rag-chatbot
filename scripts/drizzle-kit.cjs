@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { spawnSync } = require("child_process");
+const path = require("path");
 
 const command = process.argv[2];
 
@@ -20,7 +21,18 @@ if (!command || !allowedCommands.includes(command)) {
   process.exit(1);
 }
 
-const drizzleBin = require.resolve("drizzle-kit/bin.cjs");
+const drizzleBin = path.join(
+  __dirname,
+  "..",
+  "node_modules",
+  "drizzle-kit",
+  "bin.cjs"
+);
+
+if (!require("fs").existsSync(drizzleBin)) {
+  console.error("Could not find drizzle-kit binary. Run npm install first.");
+  process.exit(1);
+}
 const result = spawnSync(
   process.execPath,
   [drizzleBin, command, ...process.argv.slice(3)],
