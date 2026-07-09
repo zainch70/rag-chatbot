@@ -100,8 +100,8 @@ rag-chatbot/
 │   │   ├── chunk-test/           # Dev: test the text chunker
 │   │   ├── retrieval-test/       # Dev: test vector search
 │   │   └── health/db/            # Database health check
-│   ├── icon.svg                  # App favicon
-│   ├── apple-icon.svg            # Apple touch icon
+│   ├── icon.tsx                  # App favicon (generated route)
+│   ├── apple-icon.tsx            # Apple touch icon (generated route)
 │   └── layout.tsx
 ├── components/
 │   ├── chat/                     # Chat UI (streaming, upload, prompts)
@@ -112,6 +112,7 @@ rag-chatbot/
 ├── drizzle/                      # SQL migrations
 ├── lib/
 │   ├── prompts.ts                # RAG prompt builder
+│   ├── brand-icon.ts             # Shared flower icon markup for favicon + UI
 │   ├── parse-pdf-text.ts         # Shared pdf2json text extraction helper
 │   ├── runtime-storage.ts        # Detects serverless runtimes (Vercel/Lambda)
 │   ├── upload-document.ts        # Client upload helper
@@ -188,7 +189,8 @@ chat-window.tsx
 | `components/chat/chat-message.tsx` | User/assistant message bubbles |
 | `components/chat/chat-empty-icon.tsx` | Empty-state icon |
 | `app/layout.tsx` | Root layout, metadata, and Sonner toaster |
-| `app/icon.svg` | Favicon |
+| `app/icon.tsx` | Favicon |
+| `app/apple-icon.tsx` | Apple touch icon |
 
 ### API routes
 
@@ -354,6 +356,16 @@ Open [http://localhost:3000](http://localhost:3000), tap `+` to upload a PDF, th
 ## Deploying to Vercel
 
 This app works on Vercel with a hosted PostgreSQL database that supports pgvector (for example, Neon).
+
+### Optional: Neon + Cursor setup wizard
+
+If you use Cursor and want AI-assisted Neon setup (OAuth login, MCP server, agent skills, and help writing `DATABASE_URL` to `.env`), run this once from the project root:
+
+```bash
+npx neonctl@latest init
+```
+
+This is **optional**. It does not replace the required steps below — you still need to enable pgvector, run migrations, and set environment variables on Vercel.
 
 ### 1. Database setup
 

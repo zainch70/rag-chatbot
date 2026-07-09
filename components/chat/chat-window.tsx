@@ -96,7 +96,7 @@ export default function ChatWindow() {
       }
 
       const decoder = new TextDecoder();
-      let streamedContent = "";
+      const streamedChunks: string[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -105,7 +105,8 @@ export default function ChatWindow() {
           break;
         }
 
-        streamedContent += decoder.decode(value, { stream: true });
+        streamedChunks.push(decoder.decode(value, { stream: true }));
+        const streamedContent = streamedChunks.join("");
 
         setMessages((currentMessages) =>
           currentMessages.map((currentMessage) =>
@@ -118,6 +119,8 @@ export default function ChatWindow() {
           )
         );
       }
+
+      const streamedContent = streamedChunks.join("");
 
       if (!streamedContent.trim()) {
         throw new Error("Chat model returned an empty response.");

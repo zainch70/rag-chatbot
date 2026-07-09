@@ -1,4 +1,4 @@
-const PETAL_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
+import { BRAND_ICON_PETAL_ANGLES } from "@/lib/brand-icon";
 
 export default function ChatEmptyIcon({
   className = "h-6 w-6 text-muted-foreground",
@@ -19,14 +19,8 @@ export default function ChatEmptyIcon({
         stroke="currentColor"
         strokeWidth="1.25"
       />
-      <circle
-        cx="24"
-        cy="24"
-        r="2"
-        stroke="currentColor"
-        strokeWidth="1.25"
-      />
-      {PETAL_ANGLES.map((angle) => (
+      <circle cx="24" cy="24" r="2.25" fill="currentColor" />
+      {BRAND_ICON_PETAL_ANGLES.map((angle) => (
         <ellipse
           key={angle}
           cx="24"
