@@ -3,8 +3,6 @@ import { documentChunks } from "@/db";
 
 import { sql } from "drizzle-orm";
 
-import type { InferInsertModel } from "drizzle-orm";
-
 type SimilarChunkRow = {
   id: string;
   documentId: string;
@@ -15,13 +13,40 @@ type SimilarChunkRow = {
 };
 
 export class ChunkRepository {
+  private toPgVector(embedding: number[]) {
+    const embeddingVector = `[${embedding.join(",")}]`;
+    return sql`${embeddingVector}::vector`;
+  }
+
   async createMany(
-    chunks: InferInsertModel<typeof documentChunks>[]
+    chunks: Array<{
+      documentId: string;
+      chunkIndex: number;
+      content: string;
+      embedding: number[];
+    }>
   ) {
-    return db
-      .insert(documentChunks)
-      .values(chunks)
-      .returning();
+    if (chunks.length === 0) {
+      return [];
+    }
+
+    const savedChunks = [];
+
+    for (const chunk of chunks) {
+      const [saved] = await db
+        .insert(documentChunks)
+        .values({
+          documentId: chunk.documentId,
+          chunkIndex: chunk.chunkIndex,
+          content: chunk.content,
+          embedding: this.toPgVector(chunk.embedding),
+        })
+        .returning();
+
+      savedChunks.push(saved);
+    }
+
+    return savedChunks;
   }
 
   async findByDocumentId(documentId: string) {

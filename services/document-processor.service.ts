@@ -16,9 +16,9 @@ export class DocumentProcessorService {
 
       pdfParser.on("pdfParser_dataReady", (pdfData) => {
         const text = pdfData.Pages.map((page) =>
-          page.Texts.map((text) =>
-            text.R.map((run) => decodeURIComponent(run.T)).join("")
-          ).join(" ")
+          page.Texts.map((textItem) =>
+            textItem.R.map((run) => decodeURIComponent(run.T)).join("")
+          ).join("")
         ).join("\n\n");
 
         resolve({
