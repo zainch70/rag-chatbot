@@ -33,6 +33,7 @@ export async function POST(request: Request) {
           ? Math.min(Math.max(limit, 1), 10)
           : 5,
       documentId,
+      source: documentId ? undefined : "system",
     });
 
     return NextResponse.json({

@@ -56,10 +56,8 @@ export class ChatService {
     message: string,
     {
       limit = DEFAULT_RETRIEVAL_LIMIT,
-      documentId,
     }: {
       limit?: number;
-      documentId?: string;
     } = {}
   ) {
     this.assertApiKey();
@@ -70,27 +68,18 @@ export class ChatService {
       throw new ChatRequestError("Message is required.");
     }
 
-    if (!documentId?.trim()) {
+    const readySystemDocuments =
+      await documentRepository.countReadyBySource("system");
+
+    if (readySystemDocuments === 0) {
       throw new ChatRequestError(
-        "Upload a PDF before asking questions."
-      );
-    }
-
-    const document = await documentRepository.findById(documentId);
-
-    if (!document) {
-      throw new ChatRequestError("Uploaded document not found.");
-    }
-
-    if (document.status !== "READY") {
-      throw new ChatRequestError(
-        "Your document is still processing. Please wait and try again."
+        "Company knowledge is not ready yet. Ask an admin to add PDFs to the knowledge folder and run the seed command."
       );
     }
 
     const sources = await retrievalService.search(trimmedMessage, {
       limit,
-      documentId,
+      source: "system",
     });
     const relevantSources = this.filterRelevantSources(sources);
 

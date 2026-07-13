@@ -9,11 +9,9 @@ export async function POST(request: Request) {
     const {
       message,
       limit,
-      documentId,
     }: {
       message?: string;
       limit?: number;
-      documentId?: string;
     } = body;
 
     if (!message?.trim()) {
@@ -27,23 +25,11 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!documentId?.trim()) {
-      return NextResponse.json(
-        {
-          message: "documentId is required. Upload a PDF first.",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
-
     const result = await chatService.streamAnswer(message, {
       limit:
         typeof limit === "number"
           ? Math.min(Math.max(limit, 1), 10)
           : 5,
-      documentId,
     });
 
     return result.toTextStreamResponse();

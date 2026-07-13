@@ -6,3 +6,8 @@ export const documentStatusEnum = pgEnum("document_status", [
   "READY",
   "FAILED",
 ]);
+
+export const documentSourceEnum = pgEnum("document_source", [
+  "system",
+  "user",
+]);

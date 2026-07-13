@@ -8,9 +8,11 @@ export class RetrievalService {
     {
       limit = 5,
       documentId,
+      source,
     }: {
       limit?: number;
       documentId?: string;
+      source?: "system" | "user";
     } = {}
   ) {
     const trimmedQuery = query.trim();
@@ -25,6 +27,7 @@ export class RetrievalService {
     return chunkRepository.findSimilar(queryEmbedding, {
       limit,
       documentId,
+      source,
     });
   }
 }

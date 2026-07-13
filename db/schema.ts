@@ -7,7 +7,7 @@ import {
   vector,
 } from "drizzle-orm/pg-core";
 
-import { documentStatusEnum } from "./enums";
+import { documentSourceEnum, documentStatusEnum } from "./enums";
 
 export const documents = pgTable("documents", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -19,6 +19,8 @@ export const documents = pgTable("documents", {
   mimeType: text("mime_type").notNull(),
 
   status: documentStatusEnum("status").default("UPLOADING").notNull(),
+
+  source: documentSourceEnum("source").default("user").notNull(),
 
   storagePath: text("storage_path").notNull(),
 

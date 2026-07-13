@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileText } from "lucide-react";
 import { toast } from "sonner";
 
 import ChatEmptyIcon from "./chat-empty-icon";
@@ -18,33 +17,75 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 
 const STARTER_PROMPTS = [
-  "What is this document mainly about?",
+  "What is this company mainly about?",
   "Summarize the key points in bullet form.",
-  "What are the most important takeaways?",
-  "Explain the main section in simple terms.",
+  "What products or services are covered?",
+  "Explain the most important takeaways simply.",
 ] as const;
 
 export default function ChatWindow() {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeDocumentId, setActiveDocumentId] = useState<string | null>(
-    null
-  );
-  const [uploadedFilename, setUploadedFilename] = useState<string | null>(
-    null
-  );
+  const [knowledgeReady, setKnowledgeReady] = useState(false);
+  const [statusLoaded, setStatusLoaded] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const isEmptyState = messages.length === 0;
-  const hasActiveDocument = Boolean(activeDocumentId);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadKnowledgeStatus = async () => {
+      try {
+        const response = await fetch("/api/knowledge/status");
+        const data = (await response.json().catch(() => null)) as
+          | { ready?: boolean; message?: string }
+          | null;
+
+        if (!response.ok) {
+          throw new Error(
+            data?.message ?? "Could not check knowledge status."
+          );
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setKnowledgeReady(Boolean(data?.ready));
+      } catch (error) {
+        if (!cancelled) {
+          setKnowledgeReady(false);
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : "Could not check knowledge status.",
+            {
+              closeButton: true,
+            }
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setStatusLoaded(true);
+        }
+      }
+    };
+
+    void loadKnowledgeStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
   const handleSend = async (message: string) => {
-    if (!activeDocumentId) {
-      toast.error("Upload a PDF before asking questions.", {
+    if (!knowledgeReady) {
+      toast.error("Chat is unavailable right now. Please try again later.", {
         closeButton: true,
       });
       return;
@@ -77,7 +118,6 @@ export default function ChatWindow() {
         body: JSON.stringify({
           message,
           limit: 5,
-          documentId: activeDocumentId,
         }),
       });
 
@@ -144,31 +184,6 @@ export default function ChatWindow() {
     }
   };
 
-  const handleUploadComplete = ({
-    documentId,
-    filename,
-    isReplacing,
-  }: {
-    documentId: string;
-    filename: string;
-    isReplacing: boolean;
-  }) => {
-    setActiveDocumentId(documentId);
-    setUploadedFilename(filename);
-
-    if (isReplacing) {
-      setMessages([]);
-      toast.success(`Switched to "${filename}". Chat reset for the new document.`, {
-        closeButton: true,
-      });
-      return;
-    }
-
-    toast.success("Document uploaded successfully.", {
-      closeButton: true,
-    });
-  };
-
   return (
     <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-border/70 bg-background py-0 shadow-[0_12px_40px_-32px_rgba(15,23,42,0.35)]">
       <CardHeader className="shrink-0 border-b border-border/60 px-5 py-4">
@@ -176,18 +191,22 @@ export default function ChatWindow() {
           <div className="flex items-center gap-2.5">
             <ChatEmptyIcon className="h-4 w-4 text-muted-foreground" />
             <CardTitle className="text-base font-semibold">
-              Document chat
+              Company knowledge
             </CardTitle>
           </div>
           <span className="flex items-center gap-2 rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-xs font-medium text-muted-foreground">
             <span
               className={`size-2 rounded-full ${
-                hasActiveDocument
+                knowledgeReady
                   ? "animate-pulse bg-green-500"
                   : "bg-muted-foreground/35"
               }`}
             />
-            {hasActiveDocument ? "Active" : "Inactive"}
+            {statusLoaded
+              ? knowledgeReady
+                ? "Ready"
+                : "Unavailable"
+              : "Checking"}
           </span>
         </div>
       </CardHeader>
@@ -200,11 +219,12 @@ export default function ChatWindow() {
                 <ChatEmptyIcon />
               </div>
               <h2 className="text-xl font-semibold tracking-tight text-foreground">
-                Let&apos;s chat with your document
+                How can I help?
               </h2>
               <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-                Tap + to upload one PDF at a time, then ask a question or try
-                one of these prompts.
+                {knowledgeReady
+                  ? "Ask a question or choose a suggestion below."
+                  : "Chat is unavailable right now. Please try again later."}
               </p>
 
               <div className="mt-8 grid w-full max-w-2xl gap-3 sm:grid-cols-2">
@@ -213,7 +233,7 @@ export default function ChatWindow() {
                     key={prompt}
                     type="button"
                     variant="outline"
-                    disabled={loading || !hasActiveDocument}
+                    disabled={loading || !knowledgeReady}
                     className="h-auto min-h-11 whitespace-normal rounded-2xl border-border/70 bg-background px-4 py-3 text-left text-sm leading-5 font-normal text-foreground hover:bg-muted/50"
                     onClick={() => handleSend(prompt)}
                   >
@@ -233,27 +253,11 @@ export default function ChatWindow() {
           )}
         </ScrollArea>
 
-        <div className="shrink-0 space-y-2">
-          {uploadedFilename ? (
-            <div className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
-              <div className="flex min-w-0 items-center gap-2">
-                <FileText className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{uploadedFilename}</span>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                  Ready
-                </span>
-              </div>
-              <span className="shrink-0 text-[10px]">One PDF at a time</span>
-            </div>
-          ) : null}
-
+        <div className="shrink-0">
           <div className="rounded-[20px] border border-border/70 bg-background p-1.5">
             <ChatInput
-              disabled={loading || !hasActiveDocument}
-              hasActiveDocument={hasActiveDocument}
-              activeDocumentFilename={uploadedFilename}
+              disabled={loading || !knowledgeReady}
               onSend={handleSend}
-              onUploadComplete={handleUploadComplete}
             />
           </div>
         </div>

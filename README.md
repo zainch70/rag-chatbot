@@ -1,33 +1,32 @@
 # RAG Chatbot
 
-A Next.js **RAG (Retrieval-Augmented Generation)** chatbot over your own PDF documents. Upload PDFs, extract and chunk their text, store embeddings in PostgreSQL with pgvector, and chat with Gemini using retrieved context.
+A Next.js **RAG (Retrieval-Augmented Generation)** chatbot over **company knowledge**. An admin drops PDFs into `knowledge/`, seeds them into PostgreSQL + pgvector, and users chat with Gemini using retrieved context — no end-user upload.
 
 ## What works today
 
-- Chat-first UI with PDF upload via a `+` button in the composer (ChatGPT-style)
-- One active PDF at a time — chat is scoped to the uploaded document via `documentId`
+- Chat-first UI grounded in a **pre-seeded company knowledge base**
+- Admin seed workflow: put PDFs in `knowledge/` → `npm run knowledge:seed`
+- Documents tagged as `system` (company KB) vs `user` (legacy upload API still exists, not used by the UI)
 - Starter prompt suggestions on the empty chat screen
-- Custom replace-document dialog when switching PDFs
-- PDF upload validation (`.pdf` only, max 25 MB, basic PDF signature check)
-- Local file storage in `uploads/` during development; in-memory processing on Vercel (no writable disk)
+- Knowledge readiness badge via `GET /api/knowledge/status`
+- PDF validation for seeding (`.pdf` only, max 25 MB, basic PDF signature check)
 - PDF text extraction (`pdf2json`)
 - Text chunking (character-based, with overlap)
 - Gemini embeddings via Vercel AI SDK (`gemini-embedding-2`, 1536 dimensions) — during ingestion and query retrieval
-- Vector similarity retrieval over stored chunks for the active document only
+- Vector similarity retrieval across **all ready system documents**
 - RAG prompt building with natural fallback responses (`lib/prompts.ts`)
 - Retrieval relevance guard before prompting the model (`services/chat.service.ts`)
 - Streaming chat API and UI powered by Vercel AI SDK + Gemini (`gemini-2.5-flash`)
 - Document and chunk persistence in PostgreSQL
 - Document status lifecycle: `UPLOADING` → `PROCESSING` → `READY` / `FAILED`
 - Dev-only test endpoints for extraction, chunking, and retrieval
-- Dismissible upload/chat toasts via Sonner
+- Dismissible chat toasts via Sonner
 
 ## Planned enhancements
 
 These are **not** implemented yet:
 
 - Document list / management UI
-- Multi-document picker (switch between previously uploaded PDFs without re-uploading)
 - Source citations in the chat UI
 - Navbar and sidebar layout
 
@@ -55,31 +54,25 @@ The app follows a layered structure:
 UI (components) → API routes → Services → Repositories → Database
 ```
 
-**Ingestion flow (current):**
+**Knowledge seed flow (admin):**
 
 ```
-Upload PDF
-  → validate file (type, size, PDF signature)
-  → store PDF:
-      • local dev: save to uploads/{id}.pdf
-      • Vercel/serverless: keep in server memory only (storage_path: memory://...)
-  → create document record (status: PROCESSING)
-  → extract text from PDF (buffer or disk path)
-  → split text into chunks
-  → generate embeddings for each chunk
-  → save chunks + embeddings to document_chunks
+Add PDF(s) to knowledge/
+  → npm run knowledge:seed
+  → validate each PDF
+  → replace any existing system doc with the same filename
+  → create documents row (source: system, status: PROCESSING)
+  → extract → chunk → embed → save chunks
   → mark document READY
 ```
-
-On Vercel, the original PDF is **not** persisted to disk. Only document metadata and chunks/embeddings remain in PostgreSQL. That is enough for RAG chat, but not for re-downloading or re-processing the raw PDF later without uploading again.
 
 **RAG chat flow (current):**
 
 ```
-User question + active documentId
-  → verify document exists and is READY
+User question
+  → verify at least one READY system document exists
   → embed query (Gemini)
-  → vector search over that document's chunks only
+  → vector search over all READY system document chunks
   → filter weak matches by similarity threshold
   → build prompt with retrieved context
   → stream Gemini answer to the UI
@@ -94,8 +87,9 @@ rag-chatbot/
 ├── app/
 │   ├── (dashboard)/page.tsx      # Home page (chat workspace)
 │   ├── api/
-│   │   ├── chat/                 # Streaming RAG chat
-│   │   ├── documents/upload/     # Upload + ingest endpoint
+│   │   ├── chat/                 # Streaming RAG chat (system KB)
+│   │   ├── knowledge/status/     # Knowledge readiness check
+│   │   ├── documents/upload/     # Legacy upload + ingest (not used by UI)
 │   │   ├── documents/extract/    # Dev: extract text from a file path
 │   │   ├── chunk-test/           # Dev: test the text chunker
 │   │   ├── retrieval-test/       # Dev: test vector search
@@ -104,8 +98,9 @@ rag-chatbot/
 │   ├── apple-icon.tsx            # Apple touch icon (generated route)
 │   └── layout.tsx
 ├── components/
-│   ├── chat/                     # Chat UI (streaming, upload, prompts)
+│   ├── chat/                     # Chat UI (streaming, prompts)
 │   └── ui/                       # shadcn/ui primitives
+├── knowledge/                    # Admin-provided company PDFs (seed input)
 ├── services/                     # Business logic (see Code tour below)
 ├── repositories/                 # Database access (Drizzle)
 ├── db/                           # Schema, client, enums
@@ -115,12 +110,14 @@ rag-chatbot/
 │   ├── brand-icon.ts             # Shared flower icon markup for favicon + UI
 │   ├── parse-pdf-text.ts         # Shared pdf2json text extraction helper
 │   ├── runtime-storage.ts        # Detects serverless runtimes (Vercel/Lambda)
-│   ├── upload-document.ts        # Client upload helper
+│   ├── upload-document.ts        # Client helper for legacy upload API
 │   ├── validate-pdf-upload.ts    # Shared PDF validation rules
 │   └── utils.ts                  # Shared utilities (cn helper)
 ├── types/                        # TypeScript types
-├── scripts/drizzle-kit.cjs       # Drizzle CLI wrapper (blocks push)
-├── uploads/                      # Stored PDF files (local dev only)
+├── scripts/
+│   ├── drizzle-kit.cjs           # Drizzle CLI wrapper (blocks push)
+│   └── seed-knowledge.ts         # Admin knowledge seed script
+├── uploads/                      # Legacy local upload storage
 └── docker-compose.yaml           # PostgreSQL + pgvector
 ```
 
@@ -128,7 +125,7 @@ rag-chatbot/
 
 ## Code tour — main files and how they connect
 
-This section explains the **implemented** ingestion, retrieval, and chat API pipeline. Read it top-to-bottom to follow one PDF upload from UI to database, then a query through retrieval into Gemini answer generation.
+This section explains the **implemented** seed, retrieval, and chat API pipeline.
 
 ### Layer overview
 
@@ -145,34 +142,34 @@ Components  →  API routes  →  Services  →  Repositories  →  Database
 | Repositories | CRUD queries | `db/client.ts` |
 | `db/` | Schema + connection | PostgreSQL |
 
-### End-to-end upload flow
+### End-to-end knowledge seed flow
 
 ```
-chat-input.tsx (+ button)
-  → validate PDF client-side (lib/validate-pdf-upload.ts)
-  → POST /api/documents/upload (lib/upload-document.ts)
-    → document.service.ts        (validate + save locally or keep in memory + create document row)
-    → ingestion.service.ts       (orchestrate processing)
-      → document-processor.service.ts  (PDF buffer or file path → text)
-      → text-chunker.service.ts        (text → chunks)
-      → embedding.service.ts           (chunks → vectors)
-      → chunk.repository.ts            (save chunks)
-    → document.service.ts        (mark READY or FAILED)
-  → chat-window.tsx stores active documentId + filename
+Admin adds PDFs to knowledge/
+  → npm run knowledge:seed (scripts/seed-knowledge.ts)
+    → knowledge-seed.service.ts
+      → validate PDF
+      → replace existing system doc with same filename (if any)
+      → create documents row (source: system)
+      → ingestion.service.ts
+        → document-processor.service.ts
+        → text-chunker.service.ts
+        → embedding.service.ts
+        → chunk.repository.ts
+      → mark READY / FAILED
 ```
-
-If a PDF is already active, the UI shows a custom replace dialog before switching documents and clearing the current chat.
 
 ### End-to-end chat flow
 
 ```
 chat-window.tsx
-  → POST /api/chat { message, documentId }
+  → GET /api/knowledge/status (badge + enable composer)
+  → POST /api/chat { message }
     → chat.service.ts
-      → document.repository.ts   (verify document is READY)
+      → document.repository.ts   (require READY system docs)
       → retrieval.service.ts
         → embedding.service.ts   (query embedding)
-        → chunk.repository.ts    (vector search for active document only)
+        → chunk.repository.ts    (vector search over system docs)
       → relevance filter on similarity scores
       → lib/prompts.ts           (build RAG prompt)
       → streamText (Gemini)      (stream answer to UI)
@@ -183,9 +180,8 @@ chat-window.tsx
 | File | Role |
 | --- | --- |
 | `app/(dashboard)/page.tsx` | Home page — centered chat workspace |
-| `components/chat/chat-window.tsx` | Chat UI, starter prompts, active document state, streams answers from `POST /api/chat` |
-| `components/chat/chat-input.tsx` | Composer with `+` upload, message input, and send button |
-| `components/chat/replace-document-dialog.tsx` | Custom confirmation when replacing the active PDF |
+| `components/chat/chat-window.tsx` | Chat UI, starter prompts, knowledge status, streams answers from `POST /api/chat` |
+| `components/chat/chat-input.tsx` | Composer with message input and send button |
 | `components/chat/chat-message.tsx` | User/assistant message bubbles |
 | `components/chat/chat-empty-icon.tsx` | Empty-state icon |
 | `app/layout.tsx` | Root layout, metadata, and Sonner toaster |
@@ -196,49 +192,51 @@ chat-window.tsx
 
 | File | Role |
 | --- | --- |
-| `app/api/documents/upload/route.ts` | **Main endpoint.** Receives PDF, calls `documentService.upload()` then `ingestionService.process()`. Uses Node.js runtime with `maxDuration = 60` for serverless ingestion. |
-| `app/api/documents/extract/route.ts` | Dev only — extract text from a file path (tests `document-processor.service`) |
-| `app/api/chunk-test/route.ts` | Dev only — chunk raw text (tests `text-chunker.service`) |
+| `app/api/chat/route.ts` | Chat API — retrieves relevant chunks from the system knowledge base and streams a Gemini answer |
+| `app/api/knowledge/status/route.ts` | Returns `{ ready, documentCount }` for READY system documents |
+| `app/api/documents/upload/route.ts` | Legacy upload endpoint (not used by the UI). Still available for tooling. |
+| `app/api/documents/extract/route.ts` | Dev only — extract text from a file path |
+| `app/api/chunk-test/route.ts` | Dev only — chunk raw text |
 | `app/api/retrieval-test/route.ts` | Dev only — embeds a query and returns the top matching chunks |
-| `app/api/chat/route.ts` | Chat API — requires `documentId`, retrieves relevant chunks for that document, builds a prompt, and streams a Gemini answer |
 | `app/api/health/db/route.ts` | DB connectivity check |
 
 ### Services (business logic)
 
 | File | Role |
 | --- | --- |
-| `services/document.service.ts` | Validates PDF, saves to `uploads/{id}.pdf` locally or uses `memory://...` on serverless, creates `documents` row, updates status |
-| `services/ingestion.service.ts` | **Pipeline orchestrator** — extract from buffer or disk → chunk → save → set READY/FAILED |
+| `services/knowledge-seed.service.ts` | Admin seed: scan `knowledge/`, create/replace system docs, run ingestion |
+| `services/document.service.ts` | Legacy upload path — validates PDF, stores file, creates `user` document rows |
+| `services/ingestion.service.ts` | **Pipeline orchestrator** — extract → chunk → embed → save → set READY/FAILED |
 | `services/document-processor.service.ts` | Extracts text via `pdf2json` from an in-memory buffer or a file path |
 | `services/text-chunker.service.ts` | Splits text into chunks (1000 chars, 200 overlap, word-boundary aware) |
-| `services/embedding.service.ts` | Gemini embeddings via Vercel AI SDK (`gemini-embedding-2`, 1536 dimensions) — used during ingestion and retrieval |
-| `services/retrieval.service.ts` | Embeds the user query and performs vector similarity search over stored chunks |
-| `services/chat.service.ts` | Verifies active document, retrieves sources, filters weak matches, builds the RAG prompt, and streams the answer with Vercel AI SDK |
+| `services/embedding.service.ts` | Gemini embeddings via Vercel AI SDK (`gemini-embedding-2`, 1536 dimensions) |
+| `services/retrieval.service.ts` | Embeds the user query and performs vector similarity search |
+| `services/chat.service.ts` | Verifies system KB readiness, retrieves sources, filters weak matches, streams the answer |
 
 ### Supporting modules
 
 | File | Role |
 | --- | --- |
-| `lib/prompts.ts` | Builds the RAG system/user prompt from the question and retrieved chunks |
+| `lib/prompts.ts` | Builds the RAG prompt from the question and retrieved chunks |
 | `lib/parse-pdf-text.ts` | Converts pdf2json output into plain text |
-| `lib/runtime-storage.ts` | Detects Vercel/Lambda and chooses local disk vs in-memory upload handling |
-| `lib/upload-document.ts` | Client helper for `POST /api/documents/upload` |
-| `lib/validate-pdf-upload.ts` | Shared PDF validation rules used by client and server |
+| `lib/runtime-storage.ts` | Detects Vercel/Lambda for legacy upload storage handling |
+| `lib/upload-document.ts` | Client helper for the legacy upload API |
+| `lib/validate-pdf-upload.ts` | Shared PDF validation rules |
 | `lib/utils.ts` | `cn()` helper for Tailwind class merging |
 
 ### Repositories (database access)
 
 | File | Role |
 | --- | --- |
-| `repositories/document.repository.ts` | `create`, `findById`, `updateStatus` on `documents` |
-| `repositories/chunk.repository.ts` | `createMany`, `findByDocumentId`, `findSimilar` on `document_chunks` |
+| `repositories/document.repository.ts` | `create`, `findById`, `findByFilenameAndSource`, `countReadyBySource`, `deleteById`, `updateStatus` |
+| `repositories/chunk.repository.ts` | `createMany`, `findByDocumentId`, `findSimilar` (optional `documentId` / `source` filters) |
 
 ### Database layer
 
 | File | Role |
 | --- | --- |
 | `db/schema.ts` | Table definitions: `documents`, `document_chunks` (with `vector(1536)` embedding column) |
-| `db/enums.ts` | `document_status` enum: `UPLOADING`, `PROCESSING`, `READY`, `FAILED` |
+| `db/enums.ts` | `document_status` + `document_source` (`system` \| `user`) |
 | `db/client.ts` | Drizzle + Postgres client (uses `DATABASE_URL`) |
 | `db/index.ts` | Re-exports client, schema, enums |
 | `drizzle/` | Versioned SQL migrations — apply with `npm run db:migrate` |
@@ -336,20 +334,44 @@ Or open Drizzle Studio:
 npm run db:studio
 ```
 
-### 5. Run the dev server
+### 5. Seed company knowledge
+
+1. Copy one or more company/product PDFs into `knowledge/`.
+2. Run:
+
+```bash
+npm run knowledge:seed
+```
+
+This validates each PDF, replaces any existing **system** document with the same filename, then runs the full extract → chunk → embed pipeline.
+
+3. Confirm readiness:
+
+```bash
+curl http://localhost:3000/api/knowledge/status
+```
+
+Expected: `{ "ready": true, "documentCount": N }`.
+
+### 6. Run the dev server
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), tap `+` to upload a PDF, then ask questions in the chat panel.
+Open [http://localhost:3000](http://localhost:3000) and ask questions. No user upload is required.
 
 ### Using the UI
 
-1. Tap the `+` button in the chat composer and choose a PDF.
-2. Wait for the upload and ingestion to finish — the active document badge appears when ready.
-3. Ask a question or use one of the starter prompts.
-4. To switch PDFs, tap `+` again and confirm in the replace dialog. Only one PDF is active at a time, and the chat resets for the new document.
+1. Wait for the header badge to show **Ready** (knowledge was seeded).
+2. Ask a question or use one of the starter prompts.
+3. Answers are retrieved from all READY system documents in the knowledge base.
+
+### Updating knowledge later
+
+1. Add, replace, or remove PDFs in `knowledge/`.
+2. Run `npm run knowledge:seed` again.
+3. Files with the same filename replace the previous system document and its chunks.
 
 ---
 
@@ -391,24 +413,23 @@ Set these in the Vercel project settings:
 | `DATABASE_URL` | Neon PostgreSQL connection string |
 | `GEMINI_API_KEY` | Gemini API key for embeddings and chat |
 
-Vercel sets `VERCEL=1` automatically. The app uses that to skip local disk writes during upload.
+Vercel sets `VERCEL=1` automatically. The legacy upload API uses that to skip local disk writes. **Company knowledge seeding should be run from your machine (or CI) against the production database** before users chat — Vercel’s read-only filesystem is not meant for writing into `knowledge/` at runtime.
 
-### 3. File storage on serverless
+### 3. Seeding knowledge for production
 
-Vercel serverless functions have a **read-only filesystem**. The app does not write to `/var/task/uploads`.
+1. Keep approved PDFs in `knowledge/` (or a CI checkout of that folder).
+2. Point `DATABASE_URL` and `GEMINI_API_KEY` at production values.
+3. Run:
 
-Instead, on Vercel:
+```bash
+DATABASE_URL="your_neon_connection_string" GEMINI_API_KEY="..." npm run knowledge:seed
+```
 
-- The uploaded PDF stays in the function's memory for the duration of the upload request
-- Text is extracted from that in-memory buffer
-- Chunks and embeddings are saved to PostgreSQL
-- The raw PDF is discarded when the request ends
-
-This is enough for RAG chat. If you later need durable PDF storage or re-download support, add object storage such as Vercel Blob or S3.
+Chunks and embeddings are stored in PostgreSQL. The chat UI only needs those rows — not the original PDF files on the server.
 
 ### 4. Timeouts
 
-Large PDFs can take time to parse, chunk, and embed. The upload route sets `maxDuration = 60` seconds. On Vercel Hobby, function limits may still be lower than Pro, so very large documents may time out during ingestion.
+Large PDFs can take time to parse, chunk, and embed during `knowledge:seed`. Prefer seeding offline/CI rather than inside a short-lived serverless request.
 
 ---
 
@@ -416,27 +437,17 @@ Large PDFs can take time to parse, chunk, and embed. The upload route sets `maxD
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `POST` | `/api/documents/upload` | Upload a PDF (`multipart/form-data`, field: `file`). Validates file type/size/signature, then runs the full ingest pipeline. |
+| `POST` | `/api/chat` | JSON body: `{ "message": "...", "limit?": number }`. Streams the assistant answer as plain text from the system knowledge base. |
+| `GET` | `/api/knowledge/status` | Returns `{ "ready": boolean, "documentCount": number }` for READY system documents. |
+| `POST` | `/api/documents/upload` | Legacy. Upload a PDF (`multipart/form-data`, field: `file`). Not used by the chat UI. |
 | `POST` | `/api/documents/extract` | Dev only. JSON body: `{ "filePath": "/absolute/path/to/file.pdf" }`. Returns extracted text. |
 | `POST` | `/api/chunk-test` | Dev only. JSON body: `{ "text": "..." }`. Returns text chunks. |
 | `POST` | `/api/retrieval-test` | Dev only. JSON body: `{ "query": "...", "limit?": number, "documentId?": "uuid" }`. Returns matching chunks. |
-| `POST` | `/api/chat` | JSON body: `{ "message": "...", "documentId": "uuid", "limit?": number }`. Requires `documentId`. Streams the assistant answer as plain text. |
 | `GET` | `/api/health/db` | Returns database connection info (`current_database`, `current_user`, `version`). |
-
-### Upload response
-
-```json
-{
-  "documentId": "uuid",
-  "status": "READY"
-}
-```
-
-On failure, the API returns `{ "message": "..." }` with an appropriate HTTP status. Validation errors (invalid type, empty file, file too large, invalid PDF signature) return **400**.
 
 ### Chat response
 
-On success, `POST /api/chat` returns a **plain-text stream** (not JSON). Errors return JSON with `{ "message": "..." }`. Missing `documentId`, unknown documents, and documents still processing return **400**.
+On success, `POST /api/chat` returns a **plain-text stream** (not JSON). Errors return JSON with `{ "message": "..." }`. If no READY system documents exist, the API returns **400**.
 
 ---
 
@@ -451,7 +462,8 @@ On success, `POST /api/chat` returns a **plain-text stream** (not JSON). Errors 
 | `filename` | text | Original upload name |
 | `mime_type` | text | Must be `application/pdf` |
 | `status` | enum | `UPLOADING`, `PROCESSING`, `READY`, `FAILED` |
-| `storage_path` | text | Local dev: path in `uploads/`. Vercel: `memory://{id}.pdf` (marker only; file is not stored on disk) |
+| `source` | enum | `system` (company KB) or `user` (legacy upload). Default `user`. |
+| `storage_path` | text | Seeded docs: path under `knowledge/`. Legacy uploads: `uploads/` or `memory://...` |
 | `created_at` / `updated_at` | timestamp | Auto-managed |
 
 ### `document_chunks`
@@ -479,6 +491,7 @@ On success, `POST /api/chat` returns a **plain-text stream** (not JSON). Errors 
 | `npm run db:generate` | Generate a new SQL migration after schema changes in `db/` |
 | `npm run db:migrate` | Apply pending migrations to the database |
 | `npm run db:studio` | Open Drizzle Studio (DB browser) |
+| `npm run knowledge:seed` | Ingest all PDFs from `knowledge/` as system documents |
 
 `drizzle-kit push` is **disabled**. Use `db:generate` + `db:migrate` instead.
 
@@ -510,41 +523,35 @@ Run the pgvector extension command:
 docker exec -it rag-postgres psql -U postgres -d rag_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-### Upload fails with a database error
+### Seed fails because knowledge folder is empty
 
-1. Confirm Docker is running: `docker compose ps`
-2. Confirm `.env` `DATABASE_URL` matches `docker-compose.yaml` (port `5433`, password `12345`)
-3. Run migrations: `npm run db:migrate`
-4. Hit the health endpoint: `GET /api/health/db`
+Add at least one `.pdf` file to `knowledge/`, then run `npm run knowledge:seed`.
+
+### Chat says knowledge is not ready
+
+1. Confirm PDFs exist in `knowledge/`
+2. Run `npm run knowledge:seed`
+3. Check `GET /api/knowledge/status`
+4. Confirm migrations include `document_source` (`npm run db:migrate`)
 
 ### Only PDF files are accepted
 
-Upload validation is limited to `.pdf` files with a maximum size of **25 MB**. The client and server both check file extension, MIME type, and a basic `%PDF` file signature.
+Seed validation is limited to `.pdf` files with a maximum size of **25 MB**.
 
-### Chat answers come from the active PDF only
+### Chat answers come from the company knowledge base
 
-The UI tracks one active `documentId` at a time. Chat requests only retrieve chunks from that document, so answers do not mix in older PDFs already stored in the database.
+Retrieval searches all READY `source = system` documents. Legacy `user` uploads (if any) are ignored by the chat UI.
 
-### `uploads/` folder (local dev only)
+### `uploads/` folder (legacy local uploads)
 
-On your machine, PDFs are stored at `uploads/{document-id}.pdf`. This folder is created automatically on first upload. Do not commit uploaded files to git.
-
-On Vercel, this folder is not used.
-
-### `ENOENT: no such file or directory, mkdir '/var/task/uploads'`
-
-This means the app tried to write uploads to disk on Vercel. Deploy a version that uses `lib/runtime-storage.ts` and in-memory upload handling in `services/document.service.ts`. Vercel must have `VERCEL=1` set (automatic on Vercel deployments).
-
-### Upload succeeds locally but times out on Vercel
-
-Ingestion runs inside the upload request. Try a smaller PDF first, upgrade the Vercel plan for longer function duration, or move ingestion to a background job later.
+Only used by the legacy `/api/documents/upload` path. Company knowledge lives in `knowledge/` and is indexed via `npm run knowledge:seed`.
 
 ---
 
 ## Development notes
 
 - The home page at `app/(dashboard)/page.tsx` renders a single centered chat workspace.
-- PDF upload happens from the `+` button in `components/chat/chat-input.tsx`.
+- End users do not upload PDFs. Admins seed `knowledge/` with `npm run knowledge:seed`.
 - `embedding.service.ts` and `chat.service.ts` both use Vercel AI SDK (`ai` + `@ai-sdk/google`).
 - Chunking defaults: **1000 characters** per chunk, **200 character** overlap, with word-boundary awareness.
 - Retrieval uses a similarity threshold before building the chat prompt to reduce weak/generic answers.

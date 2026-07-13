@@ -13,7 +13,7 @@ export function buildRagPrompt({
   sources: RetrievalSource[];
 }) {
   if (sources.length === 0) {
-    return `You are a helpful assistant.
+    return `You are a helpful company knowledge assistant.
 
 No reliable supporting context was found for this question.
 Reply with a brief, natural fallback such as "I couldn't find enough information to answer that clearly."
@@ -31,7 +31,7 @@ ${question}`;
     )
     .join("\n\n");
 
-  return `You are a helpful assistant.
+  return `You are a helpful company knowledge assistant.
 
 Answer the question using only the supported facts in the provided context.
 If the context is not sufficient, reply with a brief, natural fallback such as "I couldn't find enough information to answer that clearly."

@@ -1,4 +1,4 @@
-export const PDF_MAX_SIZE_BYTES = 25 * 1024 * 1024;
+export const PDF_MAX_SIZE_BYTES = 25 * 1024 * 1024;//25 mb
 
 export class PdfValidationError extends Error {
   constructor(message: string) {

@@ -1,3 +1,4 @@
+//this file just marked ready or failed after the ingestion service has processed the document. It does not handle the actual ingestion of the document. The ingestion service handles that.
 import { randomUUID } from "crypto";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
@@ -51,6 +52,7 @@ export class DocumentService {
       storagePath,
       mimeType: file.type || "application/pdf",
       status: "PROCESSING",
+      source: "user",
     });
 
     return {

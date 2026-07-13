@@ -1,5 +1,6 @@
+// *****************(vector search over document chunks)*************
 import { db } from "@/db";
-import { documentChunks } from "@/db";
+import { documentChunks, documents } from "@/db";
 
 import { sql } from "drizzle-orm";
 
@@ -63,9 +64,11 @@ export class ChunkRepository {
     {
       limit = 5,
       documentId,
+      source,
     }: {
       limit?: number;
       documentId?: string;
+      source?: "system" | "user";
     } = {}
   ) {
     const embeddingVector = `[${embedding.join(",")}]`;
@@ -75,6 +78,11 @@ export class ChunkRepository {
 
     if (documentId) {
       filters.push(sql`${documentChunks.documentId} = ${documentId}`);
+    }
+
+    if (source) {
+      filters.push(sql`${documents.source} = ${source}`);
+      filters.push(sql`${documents.status} = ${"READY"}`);
     }
 
     const whereClause = filters.reduce((accumulator, filter, index) => {
@@ -89,6 +97,10 @@ export class ChunkRepository {
       1 - (${documentChunks.embedding} <=> ${embeddingVector}::vector)
     `;
 
+    const fromClause = source
+      ? sql`${documentChunks} INNER JOIN ${documents} ON ${documentChunks.documentId} = ${documents.id}`
+      : sql`${documentChunks}`;
+
     const result = await db.execute(sql<SimilarChunkRow>`
       SELECT
         ${documentChunks.id} AS "id",
@@ -97,7 +109,7 @@ export class ChunkRepository {
         ${documentChunks.pageNumber} AS "pageNumber",
         ${documentChunks.content} AS "content",
         ${similarity} AS "similarity"
-      FROM ${documentChunks}
+      FROM ${fromClause}
       WHERE ${whereClause}
       ORDER BY ${documentChunks.embedding} <=> ${embeddingVector}::vector
       LIMIT ${limit};
