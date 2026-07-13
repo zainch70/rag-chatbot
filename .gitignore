@@ -44,3 +44,6 @@ yarn-error.log*
 
 uploads/*
 !uploads/.gitkeep
+
+# Keep knowledge folder docs tracked; ignore company PDF binaries
+knowledge/*.pdf
